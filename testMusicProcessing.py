@@ -4,7 +4,7 @@
 from music21 import * 
 import numpy as np
 import os
-
+import pickle
 
 #Parameters-----------------------------------------------
 path = '/Users/Hannah Kim/Desktop/ESE587/FinalProject/MidiFiles/'
@@ -38,6 +38,11 @@ def readMIDIfile(filePath):
                         notes.append(str(element.pitch))
                     elif isinstance(element, chord.Chord):
                         notes.append('.'.join(str(n) for n in element.normalOrder))
+                    elif isinstance(element, note.Rest):
+                        notes.append(element.name)
+                        
+    with open('data/notes','wb') as filepath
+        pickle.dump(notes, filepath)
                 
     return notes
     
@@ -68,10 +73,10 @@ def prepareData(notes, length):
     # reshape the input into a format compatible with LSTM layers
     network_input = np.reshape(network_input, (n_patterns, sequence_length, 1))
     
-    # normalize input
-   # network_input = network_input / float(length)
+    # normalize input??????
+    #network_input = network_input / float(length)
     
-    #one hot encode output, uses Keras??
+    #one hot encode output???????? (Using keras)
     #network_output = np_utils.to_categorical(network_output)
     
     return (network_input, network_output)
@@ -88,10 +93,23 @@ print("This is the input array: \n", network_in)
 print("\n\nThis is the output array: \n" , network_out)
 
 
+#copied from Skuldur:-------------------------------------
+#From "generate_notes" module
+#Gets a random sequence from an input array and passes it
+#thru the network to get the next expected note, which is 
+#then appended to the original input and fed back in (repeat this 500 tiems)
+def generateMusic():
+    
+
+
+
+
 
 #copied from Skuldur:-------------------------------------
-#C
-def backToMIDI(network_output):
+#From "create_midi" module
+#Takes the string of notes output of makeMusic(), converts it
+#to note and chord objects, and then written to midi file
+def createMIDI(network_output):
     offset = 0
     output_notes = []
     
@@ -125,10 +143,6 @@ def backToMIDI(network_output):
     midi_stream = stream.Stream(output_notes)
 
     midi_stream.write('midi', fp='test_output.mid')
-
-
-
-
 
 
 
