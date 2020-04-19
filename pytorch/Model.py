@@ -12,10 +12,10 @@ numThreads = 8
 midi_file_dir = "./music/"
 
 saveBase = './saves/'
-notes_save_file = saveBase + 'first_notes.b'
-prepared_input_save_file = saveBase + 'first_inputs.b'
-prepared_output_save_file = saveBase + 'first_outputs.b'
-model_save_file = saveBase + 'first.pt'
+notes_save_file = saveBase + '00_notes.b'
+prepared_input_save_file = saveBase + '00_inputs.b'
+prepared_output_save_file = saveBase + '00_outputs.b'
+model_save_file = saveBase + '00_model.pt'
 generate_save_file = saveBase + 'song_00.mid'
 
 ############################
@@ -23,10 +23,10 @@ generate_save_file = saveBase + 'song_00.mid'
 batchSize = 32          # The batch size used for learning
 learning_rate = 0.05    # Learning rate used in SGD
 momentum = 0.5          # Momentum used in SGD
-epochs = 240              # Number of epochs to train for
+epochs = 10              # Number of epochs to train for
 ############################################
 
-sequence_length = 10
+sequence_length = 30
 
 bidirectional = False
 
@@ -34,14 +34,15 @@ num_layers = 2
 num_directions = 1
 if (bidirectional == True):
     num_directions = 2
-hidden_size = 256
+hidden_size = 192
+dropout = 0.33
 
 class Net(nn.Module):
     def __init__(self, input_size):
         super(Net, self).__init__()
         
         # Defaults: num_layers=1, bias=True, batch_first=False, dropout=0, bidirectional=False
-        self.lstm1 = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.lstm1 = nn.LSTM(input_size, hidden_size, num_layers, dropout=dropout, batch_first=True)
         self.fc1 = nn.Linear(hidden_size, input_size)
 
     def forward(self, x, batch_size):

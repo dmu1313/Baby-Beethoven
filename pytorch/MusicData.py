@@ -28,11 +28,11 @@ class MusicDataset(Dataset):
             
                     for element in notes_to_parse:
                         if isinstance(element, note.Note):
-                            notes.append(str(element.pitch))
+                            notes.append(str(element.pitch) + "," + str(element.quarterLength))
                         elif isinstance(element, chord.Chord):
-                            notes.append('.'.join(str(n) for n in element.normalOrder))
+                            notes.append(('.'.join(str(n) for n in element.normalOrder)) + "," + str(element.quarterLength))
                         elif isinstance(element, note.Rest):
-                            notes.append(element.name)
+                            notes.append(element.name + "," + str(element.quarterLength))
         
         with open(self.notes_save_file, 'wb') as file:
             pickle.dump(notes, file)
@@ -54,7 +54,9 @@ class MusicDataset(Dataset):
             sequence_in = notes[i:i + self.sequence_length]
             sequence_out = notes[i + self.sequence_length]
 
-            network_input.append([self.to_one_hot(note_to_int[char], num_unique_notes) for char in sequence_in])
+            # [self.to_one_hot(note_to_int[char], num_unique_notes) for char in sequence_in]
+            # np.asarray(list, dtype=np.float32)
+            network_input.append([ [1 if note_to_int[char]==index else 0 for index in range(num_unique_notes)] for char in sequence_in])
             network_output.append(note_to_int[sequence_out])
             
         n_patterns = len(network_input)
@@ -91,6 +93,7 @@ class MusicDataset(Dataset):
             notes = self.readMidiFiles(dir)
 
         self.num_unique_notes = len(set(notes))
+        print("num unique notes: " + str(self.num_unique_notes))
 
         if os.path.isfile(prepared_input_save_file) and os.path.isfile(prepared_output_save_file):
             with open(prepared_input_save_file, 'rb') as file:
