@@ -20,19 +20,20 @@ class MusicDataset(Dataset):
                 midiFile = converter.parse(dir+file)
                 notes_to_parse = None
                 
-                p = instrument.partitionByInstrument(midiFile)
+                # p = instrument.partitionByInstrument(midiFile)
                 
-                for part in p.parts:
+                # for part in p.parts:
                     #Only extract Piano
-                    notes_to_parse = part.recurse()
-            
-                    for element in notes_to_parse:
-                        if isinstance(element, note.Note):
-                            notes.append(str(element.pitch) + "," + str(element.quarterLength))
-                        elif isinstance(element, chord.Chord):
-                            notes.append(('.'.join(str(n) for n in element.normalOrder)) + "," + str(element.quarterLength))
-                        elif isinstance(element, note.Rest):
-                            notes.append(element.name + "," + str(element.quarterLength))
+                # notes_to_parse = part.recurse()
+                notes_to_parse = midiFile.recurse()
+
+                for element in notes_to_parse:
+                    if isinstance(element, note.Note):
+                        notes.append(str(element.pitch) + "," + str(element.quarterLength))
+                    elif isinstance(element, chord.Chord):
+                        notes.append(('.'.join(str(n) for n in element.normalOrder)) + "," + str(element.quarterLength))
+                    elif isinstance(element, note.Rest):
+                        notes.append(element.name + "," + str(element.quarterLength))
         
         with open(self.notes_save_file, 'wb') as file:
             pickle.dump(notes, file)
@@ -50,7 +51,7 @@ class MusicDataset(Dataset):
         network_output = []
         
         # create input sequences and the corresponding outputs
-        for i in range(0, len(notes) - self.sequence_length, 1):
+        for i in range(0, len(notes) - self.sequence_length, 4):
             sequence_in = notes[i:i + self.sequence_length]
             sequence_out = notes[i + self.sequence_length]
 

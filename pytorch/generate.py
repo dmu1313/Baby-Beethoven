@@ -1,6 +1,6 @@
 
-from Model import *
-from MusicData import MusicDataset
+from model import *
+from musicdata import MusicDataset
 import os
 from music21 import *
 
@@ -20,6 +20,12 @@ def getDurationFloat(durationString):
         return float(float(values[0]) / float(values[1]))
     return float(durationString)
 
+def getDuration(duration):
+    if duration < 0.001:
+        return 0.125
+    else:
+        return duration
+
 def create_midi(prediction_output, trainset):
     offset = 0
     output_notes = []
@@ -27,39 +33,66 @@ def create_midi(prediction_output, trainset):
     for note_full_representation in prediction_output:
         pattern = note_full_representation.split(",")[0]
         duration = note_full_representation.split(",")[1]
-        print("Duration: " + duration)
+        # print("Duration: " + duration + ", " + str(getDurationFloat(duration)))
+        duration = getDuration(getDurationFloat(duration))
+        
+
         # pattern is a chord
         if ('.' in pattern) or pattern.isdigit():
             notes_in_chord = pattern.split('.')
             notes = []
             for current_note in notes_in_chord:
                 new_note = note.Note(int(current_note))
-                new_note.quarterLength = getDurationFloat(duration)
+                new_note.quarterLength = duration
                 new_note.storedInstrument = instrument.Piano()
                 notes.append(new_note)
             new_chord = chord.Chord(notes)
-            new_chord.quarterLength = getDurationFloat(duration)
+            new_chord.quarterLength = duration
             new_chord.offset = offset
             output_notes.append(new_chord)
+
+            # if duration > 0.55:
+            #     offset += 0.5
+            # else:
+            #     offset += duration
         # pattern is a rest
         elif('rest' in pattern):
             new_rest = note.Rest(pattern)
-            new_rest.quarterLength = getDurationFloat(duration)
+            new_rest.quarterLength = duration
             new_rest.offset = offset
             new_rest.storedInstrument = instrument.Piano() #???
             output_notes.append(new_rest)
+
+            # offset += duration
         # pattern is a note
         else:
             new_note = note.Note(pattern)
-            new_note.quarterLength = getDurationFloat(duration)
+            new_note.quarterLength = duration
             new_note.offset = offset
             new_note.storedInstrument = instrument.Piano()
             output_notes.append(new_note)
 
-        # increase offset each iteration so that notes do not stack
-        offset += 0.5
+            # if duration > 0.55:
+            #     offset += 0.5
+            # else:
+            #     offset += duration
 
-    midi_stream = stream.Stream(output_notes)
+
+        # offset += duration
+        # increase offset each iteration so that notes do not stack
+        if duration >= 1.0:
+            offset += 0.00
+        else:
+            offset += duration
+
+    midi_stream = stream.Stream()
+    tempo_mm = tempo.MetronomeMark(number=72)
+    timeSig = meter.TimeSignature('4/4')
+    
+    midi_stream.append(tempo_mm)
+    midi_stream.append(timeSig)
+    midi_stream.append(output_notes)
+    # print(output_notes)
 
     midi_stream.write('midi', fp=generate_save_file)
 
@@ -101,10 +134,6 @@ def generate():
         for i in range(SONG_LENGTH):
             output, (hn, cn) = myNet(initial_inputs, 1)
             _, predicted = torch.max(output.data, 1)
-            # print(predicted.shape)
-            # print(predicted.numpy()[0])
-            # print(initial_inputs.shape)
-            # print(initial_inputs)
             
             int_out = predicted.numpy()[0]
             final_outputs.append(int_to_note[int_out])
@@ -114,4 +143,5 @@ def generate():
 
     create_midi(final_outputs, trainset)
 
-#generate()
+if __name__ == "__main__":
+    generate()
