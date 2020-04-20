@@ -71,9 +71,9 @@ while epoch < epochs:
         running_loss += loss.item()
 
         # Print the average loss every 256 minibatches ( == 16384 images)
-        if i % 8 == 3:
+        if i % 8 == 7:
             print('[%d, %5d] loss: %.3f' %
-                  (epoch + 1, i + 1, running_loss / 4))
+                  (epoch + 1, i + 1, running_loss / 8))
             running_loss = 0.0
 
     epoch += 1
