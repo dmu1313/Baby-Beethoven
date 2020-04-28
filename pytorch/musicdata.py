@@ -55,7 +55,7 @@ class MusicDataset(Dataset):
         network_output = []
         
         # create input sequences and the corresponding outputs
-        for i in range(0, len(notes) - self.sequence_length, 4):
+        for i in range(0, len(notes) - self.sequence_length, 1):
             sequence_in = notes[i:i + self.sequence_length]
             sequence_out = notes[i + self.sequence_length]
 
@@ -76,11 +76,15 @@ class MusicDataset(Dataset):
         print(network_input.dtype)
 
         with h5py.File(self.prepared_input_save_file, "a") as file:
-            del file[input_dataset_name]
-            file.create_dataset(input_dataset_name, data=network_input)
+            if file.get(input_dataset_name):
+                del file[input_dataset_name]
+            file[input_dataset_name] = network_input
+            # file.create_dataset(input_dataset_name, data=network_input)
         with h5py.File(self.prepared_output_save_file, "a") as file:
-            del file[output_dataset_name]
-            file.create_dataset(output_dataset_name, data=network_output)
+            if file.get(output_dataset_name):
+                del file[output_dataset_name]
+            file[output_dataset_name] = network_output
+            # file.create_dataset(output_dataset_name, data=network_output)
 
         # with open(self.prepared_input_save_file, 'wb') as file:
         #     pickle.dump(network_input, file)
