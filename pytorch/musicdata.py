@@ -115,9 +115,9 @@ class MusicDataset(Dataset):
 
         if os.path.isfile(prepared_input_save_file) and os.path.isfile(prepared_output_save_file):
             with h5py.File(self.prepared_input_save_file, "r") as file:
-                inputs = file[input_dataset_name]
+                inputs = file[input_dataset_name][:]
             with h5py.File(self.prepared_output_save_file, "r") as file:
-                outputs = file[output_dataset_name]
+                outputs = file[output_dataset_name][:]
             # with open(prepared_input_save_file, 'rb') as file:
             #     inputs = pickle.load(file)
             # with open(prepared_output_save_file, 'rb') as file:
