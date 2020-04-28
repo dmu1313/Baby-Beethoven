@@ -6,6 +6,10 @@ import sys
 import numpy as np
 from music21 import *
 import pickle
+import h5py
+
+input_dataset_name = 'input'
+output_dataset_name = 'output'
 
 class MusicDataset(Dataset):
 
@@ -69,10 +73,19 @@ class MusicDataset(Dataset):
         # network_input = network_input / float(num_unique_notes)
         # network_output = self.to_one_hot(network_output, num_unique_notes)
         
-        with open(self.prepared_input_save_file, 'wb') as file:
-            pickle.dump(network_input, file)
-        with open(self.prepared_output_save_file, 'wb') as file:
-            pickle.dump(network_output, file)
+        print(network_input.dtype)
+
+        with h5py.File(self.prepared_input_save_file, "a") as file:
+            del file[input_dataset_name]
+            file.create_dataset(input_dataset_name, data=network_input)
+        with h5py.File(self.prepared_output_save_file, "a") as file:
+            del file[output_dataset_name]
+            file.create_dataset(output_dataset_name, data=network_output)
+
+        # with open(self.prepared_input_save_file, 'wb') as file:
+        #     pickle.dump(network_input, file)
+        # with open(self.prepared_output_save_file, 'wb') as file:
+        #     pickle.dump(network_output, file)
 
         return (network_input, network_output)
 
@@ -97,12 +110,19 @@ class MusicDataset(Dataset):
         print("num unique notes: " + str(self.num_unique_notes))
 
         if os.path.isfile(prepared_input_save_file) and os.path.isfile(prepared_output_save_file):
-            with open(prepared_input_save_file, 'rb') as file:
-                inputs = pickle.load(file)
-            with open(prepared_output_save_file, 'rb') as file:
-                outputs = pickle.load(file)
+            with h5py.File(self.prepared_input_save_file, "r") as file:
+                inputs = file[input_dataset_name]
+            with h5py.File(self.prepared_output_save_file, "r") as file:
+                outputs = file[output_dataset_name]
+            # with open(prepared_input_save_file, 'rb') as file:
+            #     inputs = pickle.load(file)
+            # with open(prepared_output_save_file, 'rb') as file:
+            #     outputs = pickle.load(file)
         else:
             inputs, outputs = self.prepareData(notes, self.num_unique_notes)
+
+        print(inputs)
+        print(outputs)
 
         assert(len(inputs) == len(outputs))
         self.notes = notes
