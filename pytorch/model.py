@@ -16,7 +16,8 @@ notes_save_file = saveBase + '05_notes.b'
 prepared_input_save_file = saveBase + '05_inputs.hdf5'
 prepared_output_save_file = saveBase + '05_outputs.hdf5'
 model_save_file = saveBase + '05_model.pt'
-generate_save_file = saveBase + 'song_35.mid'
+generate_save_file_prefix = saveBase + 'song_35'
+generate_save_file_extension = '.mid'
 
 ############################
 # Hyperparameters

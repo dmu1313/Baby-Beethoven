@@ -110,4 +110,4 @@ with torch.no_grad():
             initial_inputs[0][j-1] = initial_inputs[0][j]
         initial_inputs[0][sequence_length-1] = torch.from_numpy(to_one_hot(int_out, trainset.num_unique_notes))
 
-create_midi(final_outputs, trainset)
+create_midi(final_outputs, 0)
