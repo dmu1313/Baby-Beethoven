@@ -124,11 +124,14 @@ def generate(numSongs):
 
     with torch.no_grad():
         inputs = []
+        counter = 0
         # Only get 1 random sequence to start things off
         for data in generateLoader:
             initial_inputs, labels = data
             inputs.append(initial_inputs)
-            break
+            counter += 1
+            if (counter == numSongs):
+                break
         
         pitchnames = sorted(set(item for item in trainset.notes))
         int_to_note = dict((number, note) for number, note in enumerate(pitchnames))
