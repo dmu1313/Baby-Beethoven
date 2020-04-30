@@ -13,6 +13,7 @@ midi_file_dir = "./music/"
 
 saveBase = './saves/'
 notes_save_file = saveBase + '05_notes.b'
+song_start_indices_save_file = saveBase + '05_notes_song_starts.b'
 prepared_input_save_file = saveBase + '05_inputs.hdf5'
 prepared_output_save_file = saveBase + '05_outputs.hdf5'
 model_save_file = saveBase + '05_model.pt'
@@ -21,13 +22,13 @@ generate_save_file_extension = '.mid'
 
 ############################
 # Hyperparameters
-batchSize = 32          # The batch size used for learning
+batchSize = 64          # The batch size used for learning
 learning_rate = 0.05    # Learning rate used in SGD
 momentum = 0.5          # Momentum used in SGD
 epochs = 50              # Number of epochs to train for
 ############################################
 
-sequence_length = 40
+sequence_length = 85
 
 bidirectional = False
 
@@ -36,7 +37,7 @@ num_directions = 1
 if (bidirectional == True):
     num_directions = 2
 hidden_size = 512
-dropout = 0.33
+dropout = 0.5
 
 class Net(nn.Module):
     def __init__(self, input_size):

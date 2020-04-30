@@ -11,7 +11,8 @@ import torch.optim as optim
 
 # Set up training and test data
 trainset = MusicDataset(midi_file_dir, sequence_length, notes_save_file,
-                        prepared_input_save_file, prepared_output_save_file)
+                        prepared_input_save_file, prepared_output_save_file,
+                        song_start_indices_save_file)
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=batchSize,
                                           shuffle=True, num_workers=0)
 ##################################

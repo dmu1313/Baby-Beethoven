@@ -3,6 +3,7 @@ from model import *
 from musicdata import MusicDataset
 import os
 from music21 import *
+from fractions import Fraction
 
 import numpy as np
 import torch
@@ -17,14 +18,9 @@ def to_one_hot(values, num_classes):
 def getDurationFloat(durationString):
     if "/" in durationString:
         values = durationString.split("/")
-        return float(float(values[0]) / float(values[1]))
+        return Fraction(float(values[0]), float(values[1]))
+        # return float(float(values[0]) / float(values[1]))
     return float(durationString)
-
-def getDuration(duration):
-    if duration < 0.001:
-        return 0.125
-    else:
-        return duration
 
 def create_midi(prediction_output, songNum):
     offset = 0
@@ -34,7 +30,7 @@ def create_midi(prediction_output, songNum):
         pattern = note_full_representation.split(",")[0]
         duration = note_full_representation.split(",")[1]
         # print("Duration: " + duration + ", " + str(getDurationFloat(duration)))
-        duration = getDuration(getDurationFloat(duration))
+        duration = getDurationFloat(duration)
         
 
         # pattern is a chord
@@ -78,12 +74,12 @@ def create_midi(prediction_output, songNum):
             #     offset += duration
 
 
-        # offset += duration
+        offset += duration
         # increase offset each iteration so that notes do not stack
-        if duration >= 1.0:
-            offset += 0.00
-        else:
-            offset += duration
+        # if duration >= 1.0:
+        #     offset += 0.00
+        # else:
+        #     offset += duration
 
     midi_stream = stream.Stream()
     tempo_mm = tempo.MetronomeMark(number=72)
@@ -100,7 +96,8 @@ def create_midi(prediction_output, songNum):
 def generate(numSongs):
     # Initialize Network
     trainset = MusicDataset(midi_file_dir, sequence_length, notes_save_file,
-                            prepared_input_save_file, prepared_output_save_file)
+                            prepared_input_save_file, prepared_output_save_file,
+                            song_start_indices_save_file)
     generateLoader = torch.utils.data.DataLoader(trainset, batch_size=1,
                                             shuffle=True, num_workers=0)
 
