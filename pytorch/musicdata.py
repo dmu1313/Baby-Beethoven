@@ -84,13 +84,14 @@ class MusicDataset(Dataset):
         network_output = []
         
         # create input sequences and the corresponding outputs
-        for song_start in range(len(song_start_indices)):
-            if (song_start + 1 == len(song_start_indices)):
+        for j in range(len(song_start_indices)):
+            print("Generating inputs/outputs for song " + str(j))
+            if (j + 1 == len(song_start_indices)):
                 song_end = len(notes)
             else:
-                song_end = song_start_indices[song_start+1]
+                song_end = song_start_indices[j+1]
 
-            for i in range(song_start, song_end - self.sequence_length, 1):
+            for i in range(song_start_indices[j], song_end - self.sequence_length, 1):
                 sequence_in = notes[i:i + self.sequence_length]
                 sequence_out = notes[i + self.sequence_length]
 
