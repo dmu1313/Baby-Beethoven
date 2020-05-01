@@ -4,13 +4,15 @@ from musicdata import MusicDataset
 import os
 from music21 import *
 from fractions import Fraction
+import random
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-SONG_LENGTH = 200
+# Song length can't be too long. Does not generate long music well.
+SONG_LENGTH = 80
 
 def to_one_hot(values, num_classes):
     return np.eye(num_classes, dtype='float')[values]
@@ -93,7 +95,7 @@ def create_midi(prediction_output, songNum):
     song_save_file = generate_save_file_prefix + '_' + str(songNum) + generate_save_file_extension
     midi_stream.write('midi', fp=song_save_file)
 
-def generate(numSongs):
+def generate(numSongs, genRandom=False):
     # Initialize Network
     trainset = MusicDataset(midi_file_dir, sequence_length, notes_save_file,
                             prepared_input_save_file, prepared_output_save_file,
@@ -122,16 +124,30 @@ def generate(numSongs):
     with torch.no_grad():
         inputs = []
         counter = 0
-        # Only get 1 random sequence to start things off
-        for data in generateLoader:
-            initial_inputs, labels = data
-            inputs.append(initial_inputs)
-            counter += 1
-            if (counter == numSongs):
-                break
+
+        if genRandom == False:
+            for data in generateLoader:
+                initial_inputs, labels = data
+                inputs.append(initial_inputs)
+                counter += 1
+                if (counter == numSongs):
+                    break
         
         pitchnames = sorted(set(item for item in trainset.notes))
         int_to_note = dict((number, note) for number, note in enumerate(pitchnames))
+
+        # Generate a <sequence_length> length stream of random one-hot vectors as input
+        num_unique_notes = len(pitchnames)
+        
+        if genRandom:
+            for i in range(numSongs):
+                randSequence = []
+                for note_num in range(sequence_length):
+                    randIndex = random.randint(0, num_unique_notes-1) # Generate random int in range, inclusive
+                    randSequence.append([1 if randIndex == j else 0 for j in range(num_unique_notes)])
+                npRandSeq = np.reshape(np.array(randSequence), (1, sequence_length, num_unique_notes))
+                torchSeq = torch.from_numpy(npRandSeq)
+                inputs.append(torchSeq)
 
         for songNum in range(numSongs):
             final_outputs = []
@@ -148,4 +164,4 @@ def generate(numSongs):
             create_midi(final_outputs, songNum)
 
 if __name__ == "__main__":
-    generate(15)
+    generate(15, False)
