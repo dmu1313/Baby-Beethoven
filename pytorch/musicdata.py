@@ -99,43 +99,46 @@ class MusicDataset(Dataset):
                 # np.asarray(list, dtype=np.float32)
                 network_input.append([ [1 if note_to_int[char]==index else 0 for index in range(num_unique_notes)] for char in sequence_in])
                 network_output.append(note_to_int[sequence_out])
+                del sequence_in
+                del sequence_out
             
         n_patterns = len(network_input)
         
         # reshape the input into a format compatible with LSTM layers
-        network_input = np.reshape(network_input, (n_patterns, self.sequence_length, num_unique_notes))
-
+        network_input_reshaped = np.reshape(network_input, (n_patterns, self.sequence_length, num_unique_notes))
+        del network_input
         # # normalize input
         # network_input = network_input / float(num_unique_notes)
         # network_output = self.to_one_hot(network_output, num_unique_notes)
         
-        print(network_input.dtype)
+        print(network_input_reshaped.dtype)
 
         with h5py.File(self.prepared_input_save_file, "a") as file:
             if file.get(input_dataset_name):
                 del file[input_dataset_name]
-            file.create_dataset(input_dataset_name, data=network_input)
-            # file[input_dataset_name] = network_input
+            file.create_dataset(input_dataset_name, data=network_input_reshaped)
+            # file[input_dataset_name] = network_input_reshaped
         with h5py.File(self.prepared_output_save_file, "a") as file:
             if file.get(output_dataset_name):
                 del file[output_dataset_name]
             file.create_dataset(output_dataset_name, data=network_output)
             # file[output_dataset_name] = network_output
 
-        return (network_input, network_output)
+        return (network_input_reshaped, network_output)
 
     def to_one_hot(self, values, num_classes):
         return np.eye(num_classes, dtype='float')[values]
 
     def __init__(self, dir, sequence_length, notes_save_file,
                 prepared_input_save_file, prepared_output_save_file,
-                song_start_indices_save_file):
+                song_start_indices_save_file, stream=False):
         self.dir = dir
         self.sequence_length = sequence_length
         self.notes_save_file = notes_save_file
         self.prepared_input_save_file = prepared_input_save_file
         self.prepared_output_save_file = prepared_output_save_file
         self.song_start_indices_save_file = song_start_indices_save_file
+        self.stream = stream
 
         if os.path.isfile(notes_save_file):
             with open(notes_save_file, 'rb') as file:
@@ -151,10 +154,16 @@ class MusicDataset(Dataset):
         print(song_start_indices)
 
         if os.path.isfile(prepared_input_save_file) and os.path.isfile(prepared_output_save_file):
-            with h5py.File(self.prepared_input_save_file, "r") as file:
-                inputs = file[input_dataset_name][:]
-            with h5py.File(self.prepared_output_save_file, "r") as file:
-                outputs = file[output_dataset_name][:]
+            if stream:
+                self.input_file = h5py.File(self.prepared_input_save_file, "r")
+                self.output_file = h5py.File(self.prepared_output_save_file, "r")
+                inputs = self.input_file[input_dataset_name]
+                outputs = self.output_file[output_dataset_name]
+            else:
+                with h5py.File(self.prepared_input_save_file, "r") as file:
+                    inputs = file[input_dataset_name][:]
+                with h5py.File(self.prepared_output_save_file, "r") as file:
+                    outputs = file[output_dataset_name][:]
         else:
             inputs, outputs = self.prepareData(notes, self.num_unique_notes, song_start_indices)
 

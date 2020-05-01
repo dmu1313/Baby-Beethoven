@@ -18,7 +18,7 @@ def to_one_hot(values, num_classes):
 def getDurationFloat(durationString):
     if "/" in durationString:
         values = durationString.split("/")
-        return Fraction(float(values[0]), float(values[1]))
+        return Fraction(int(values[0]), int(values[1]))
         # return float(float(values[0]) / float(values[1]))
     return float(durationString)
 
@@ -97,7 +97,7 @@ def generate(numSongs):
     # Initialize Network
     trainset = MusicDataset(midi_file_dir, sequence_length, notes_save_file,
                             prepared_input_save_file, prepared_output_save_file,
-                            song_start_indices_save_file)
+                            song_start_indices_save_file, True)
     generateLoader = torch.utils.data.DataLoader(trainset, batch_size=1,
                                             shuffle=True, num_workers=0)
 
