@@ -24,8 +24,8 @@ def writeTensors(weights, level, file):
     if dimensions == 1:
         writeWithSpacing("{", level, file)
         for i in range(len(weights)):
-            output = str(weights[i].item())
-            # output = "{:.2f}".format(weights[i].item())
+            # output = str(weights[i].item())
+            output = "{:.8f}".format(weights[i].item())
             if i < len(weights)-1:
                 file.write(output + ",")
             else:
