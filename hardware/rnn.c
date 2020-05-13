@@ -92,9 +92,6 @@
 #define GENERATED_SONG_LENGTH 80
 #define SEQUENCE_LENGTH 85
 
-// int inputs[SEQUENCE_LENGTH][] = {
-
-// };
 #include "inputs.h"
 
 #include <stdio.h>
@@ -108,10 +105,11 @@
 // #define TIMER_FREQ 				XPAR_TMRCTR_0_CLOCK_FREQ_HZ
 // #define TMRCTR_DEVICE_ID        XPAR_TMRCTR_0_DEVICE_ID
 
-
-float sigmoid(float x) {
-    return 1.0 / (1.0 + exp(-x))
-}
+float sigmoid(float x);
+void vector_sigmoid(float * vector, int length);
+void vector_tanh(float * input, float * output, int length);
+void hadamard_product(float * a, float * b, float * output, int length);
+void vector_add(float * a, float * b, float * output, int length);
 
 void setup_weight_arrays(float** W_ii[2], float** W_if[2], float** W_ig[2], float** W_io[2],
                          float** W_hi[2], float** W_hf[2], float** W_hg[2], float** W_ho[2],
@@ -120,6 +118,13 @@ void setup_weight_arrays(float** W_ii[2], float** W_if[2], float** W_ig[2], floa
                         );
 void fc_calc(float lstm_output[HIDDEN_SIZE], float fc_results[INPUT_SIZE]);
 int log_softmax(float fc_results[INPUT_SIZE]);
+void lstm_matrix_component(float ** weight_input, float * input, float * bias_input,
+                           float ** weight_hidden, float * hidden_state, float * bias_hidden, 
+                           float * result, int hidden_size, int input_size);
+void matrix_vector_mult(float ** weights, float * input, float * bias, float * output, int rows, int cols);
+
+void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, float * output, int length);
+void calc_hidden_state(float * o_t, float * c_t, float * output, int length);
 
 int main()
 {
@@ -135,6 +140,9 @@ int main()
     
     // volatile unsigned int* hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
     volatile unsigned int* hadamard_hw = (unsigned int*)XPAR_BRAM_HADAMARD_0_S00_AXI_BASEADDR;
+
+    // Store generated notes
+    int selected_notes[GENERATED_SONG_LENGTH];
 
     // Combine weights of different LSTM layers into 1 array.
     float** W_ii[NUM_LSTM_LAYERS];
@@ -163,9 +171,27 @@ int main()
                          b_hi, b_hf, b_hg, b_ho
                         );
 
+    float i_t[HIDDEN_SIZE];
+    float f_t[HIDDEN_SIZE];
+    float g_t[HIDDEN_SIZE];
+    float o_t[HIDDEN_SIZE];
+
+    // Inputs for layers beyond 1
+    float intermediate_inputs[SEQUENCE_LENGTH][HIDDEN_SIZE];
+
     for (int noteNum = 0; noteNum < GENERATED_SONG_LENGTH; noteNum++) {
-        // Do calculations for LSTM layers
         for (int layer = 0; layer < NUM_LSTM_LAYERS; layer++) {
+            int input_size;
+            float ** inputs;
+            if (layer == 0) {
+                input_size = INPUT_SIZE;
+                inputs = initial_inputs;
+            }
+            else {
+                input_size = HIDDEN_SIZE;
+                inputs = intermediate_inputs;
+            }
+
             float hidden_state[HIDDEN_SIZE];
             float cell_state[HIDDEN_SIZE];
             for (int i = 0; i < HIDDEN_SIZE; i++) hidden_state[i] = 0;
@@ -173,51 +199,69 @@ int main()
 
             for (int t = 0; t < SEQUENCE_LENGTH; t++) {
                 // Calculate i_t
-                float i_t[HIDDEN_SIZE];
                 for (int i = 0; i < HIDDEN_SIZE; i++) i_t[i] = 0;
-                
-                for (int i = 0; i < HIDDEN_SIZE; i++) {
-                    for (int j = 0; j < INPUT_SIZE; j++) {
-                        i_t += W_ii[layer][i][j] * inputs[t][j];
-                    }
-                    i_t += b_ii[i];
-                }
-
-                for (int i = 0; i < HIDDEN_SIZE; i++) {
-                    for (int j = 0; j < HIDDEN_SIZE; j++) {
-                        i_t += W_hi[layer][i][j] * hidden_state[t][j];
-                    }
-                    i_t += b_hi[i];
-                }
-                
+                lstm_matrix_component(
+                            W_ii[layer], inputs[t], b_ii[layer],
+                            W_hi[layer], hidden_state[t], b_hi[layer], 
+                            i_t, HIDDEN_SIZE, INPUT_SIZE
+                        );
+                vector_sigmoid(i_t, HIDDEN_SIZE);
 
                 // Calculate f_t
-                
+                for (int i = 0; i < HIDDEN_SIZE; i++) f_t[i] = 0;
+                lstm_matrix_component(
+                            W_if[layer], inputs[t], b_if[layer],
+                            W_hf[layer], hidden_state[t], b_hf[layer], 
+                            f_t, HIDDEN_SIZE, INPUT_SIZE
+                        );
+                vector_sigmoid(f_t, HIDDEN_SIZE);
 
                 // Calculate g_t
-
+                for (int i = 0; i < HIDDEN_SIZE; i++) g_t[i] = 0;
+                lstm_matrix_component(
+                            W_ig[layer], inputs[t], b_ig[layer],
+                            W_hg[layer], hidden_state[t], b_hg[layer], 
+                            g_t, HIDDEN_SIZE, INPUT_SIZE
+                        );
+                vector_tanh(g_t, g_t, HIDDEN_SIZE);
 
                 // Calculate o_t
-
+                for (int i = 0; i < HIDDEN_SIZE; i++) o_t[i] = 0;
+                lstm_matrix_component(
+                            W_io[layer], inputs[t], b_io[layer],
+                            W_ho[layer], hidden_state[t], b_ho[layer], 
+                            o_t, HIDDEN_SIZE, INPUT_SIZE
+                        );
+                vector_sigmoid(o_t, HIDDEN_SIZE);
 
                 // Calculate c_t
-
+                calc_cell_state(f_t, cell_state, i_t, g_t, cell_state, HIDDEN_SIZE);
 
                 // Calculate h_t
+                calc_hidden_state(o_t, cell_state, hidden_state, HIDDEN_SIZE);
+                for (int i = 0; i < hidden_state; i++) { 
+                    intermediate_inputs[t][i] = hidden_state[i];
+                }
             }
         }
 
+        // Completed LSTM Calculations. Now do FC and log softmax
+        // intermediate_inputs[SEQUENCE_LENGTH-1] is the output we take from the LSTMs
         // input to FC: lstm_output[512]
-
         float fc_results[INPUT_SIZE];
-        fc_calc(lstm_output, fc_results);
+        fc_calc(intermediate_inputs[SEQUENCE_LENGTH-1], fc_results);
+        
+        // log softmax and get most likely next note
         int selected_note = log_softmax(fc_results);
-        // Done
+        selected_notes[noteNum] = selected_note;
+    }
+
+    for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
+        printf("%d, ", selected_notes[i]);
     }
 
 
-
-
+/*
     float i_t[HIDDEN_SIZE];
 	float hadarmard_results[HIDDEN_SIZE];
 
@@ -234,7 +278,7 @@ int main()
 			bram_w[i*128 + j] = W[i][j];
 		}
 	}
-
+*/
 
 	// Prepare timer stuff
     // XTmrCtr TimerCounter;
@@ -250,7 +294,7 @@ int main()
     // int time0 = XTmrCtr_GetValue(&TimerCounter, 0);      // read timer value
     // XTmrCtr_Start(&TimerCounter, 0);                     // start timer
 
-
+/*
     for (int t = 0; t < C; t += P) {
 
     	// Copy input t (x[t][0] through x[t][N-1]) to input BRAM
@@ -284,14 +328,9 @@ int main()
     // int time1 = XTmrCtr_GetValue(&TimerCounter, 0);
     // printf("Measured %d clock cycles == %f seconds\r\n", (time1-time0),((double)(time1-time0))/(TIMER_FREQ));
 
-
-    // Verify results
-    int errors = verify_results(expected, y);
-    printf("%d errors\r\n", errors);
+*/
 
     printf("-------------- Done ------------\r\n\n\n\n");
-
-
     cleanup_platform();
     return 0;
 }
@@ -332,6 +371,66 @@ int log_softmax(float fc_results[INPUT_SIZE]) {
     return index;
 }
 
+void hadamard_product(float * a, float * b, float * output, int length) {
+    for (int i = 0; i < length; i++) {
+        output[i] = a[i] * b[i];
+    }
+}
+
+void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, float * output, int length) {
+    // Overwrite f_t and use it as temporary storage since we don't need f_t after this point.
+    hadamard_product(f_t, prev_c_t, f_t, length);
+    hadamard_product(i_t, g_t, output, length);
+    vector_add(f_t, output, output, length);
+}
+
+void calc_hidden_state(float * o_t, float * c_t, float * output, int length) {
+    float temp[HIDDEN_SIZE];
+    vector_tanh(c_t, temp, length);
+    hadamard_product(o_t, temp, output, length);
+}
+
+// Use this for i_t, f_t, g_t, o_t
+void lstm_matrix_component(float ** weight_input, float * input, float * bias_input,
+                           float ** weight_hidden, float * hidden_state, float * bias_hidden, 
+                           float * result, int hidden_size, int input_size) {
+    matrix_vector_mult(weight_input, input, bias_input, result, hidden_size, input_size);
+    matrix_vector_mult(weight_hidden, hidden_state, bias_hidden, result, hidden_size, input_size);
+}
+
+// weights_cols == len(input)
+// weights_rows == len(bias) == len(output)
+void matrix_vector_mult(float ** weights, float * input, float * bias, float * output,
+                        int rows, int cols) {
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            output[i] += weights[i][j] * inputs[j];
+        }
+        output[i] += bias[i];
+    }
+}
+
+void vector_add(float * a, float * b, float * output, int length) {
+    for (int i = 0; i < length; i++) {
+        output[i] = a[i] + b[i];
+    }
+}
+
+float sigmoid(float x) {
+    return 1.0 / (1.0 + exp(-x))
+}
+
+void vector_sigmoid(float * vector, int length) {
+    for (int i = 0; i < length; i++) {
+        vector[i] = sigmoid(vector[i]);
+    }
+}
+
+void vector_tanh(float * input, float * output, int length) {
+    for (int i = 0; i < length; i++) {
+        output[i] = tanhf(input[i]);
+    }
+}
 
 void setup_weight_arrays(float** W_ii[2], float** W_if[2], float** W_ig[2], float** W_io[2],
                          float** W_hi[2], float** W_hf[2], float** W_hg[2], float** W_ho[2],
