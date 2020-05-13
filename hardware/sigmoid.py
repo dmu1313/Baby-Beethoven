@@ -17,6 +17,12 @@ def sigmoid(x):
 def graph(lines, plot_sigmoid, plot_tanh):
     overall_x = np.linspace(-6, 6, 500)
     piecewise = []
+
+
+    fig, ax = plt.subplots()
+    ax.tick_params(axis='both', which='major', labelsize=28)
+    ax.tick_params(axis='both', which='minor', labelsize=28)
+
     for line in lines:
         x = np.linspace(line.x1, line.x2, math.floor((line.x2-line.x1)*500))
         y = (line.slope * x) + line.b
