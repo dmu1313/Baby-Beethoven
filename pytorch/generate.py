@@ -166,22 +166,29 @@ def generate(numSongs, genRandom=False):
 
         # Debugging output so that we can determine what notes were passed to the network initially
         for i in range(len(inputs)):
-            generated_indices = "song " + str(i) + ": "
+            generated_indices = "song " + str(i) + " (input): "
             for j in range(sequence_length):
                 generated_indices = generated_indices + str(oneHotIndex(inputs[i][0][j])) + ", "
             print(generated_indices)
 
         for songNum in range(numSongs):
             final_outputs = []
+            debug_outputs = []
             for i in range(SONG_LENGTH):
                 output, (hn, cn) = myNet(inputs[songNum], 1)
                 _, predicted = torch.max(output.data, 1)
                 
                 int_out = predicted.numpy()[0]
                 final_outputs.append(int_to_note[int_out])
+                debug_outputs.append(int_out)
                 for j in range(1, len(inputs[songNum][0])):
                     inputs[songNum][0][j-1] = inputs[songNum][0][j]
                 inputs[songNum][0][sequence_length-1] = torch.from_numpy(to_one_hot(int_out, trainset.num_unique_notes))
+
+            generated_outputs = "song " + str(songNum) + " (output): "
+            for i in range(len(debug_outputs)):
+                generated_outputs = generated_outputs + str(debug_outputs[i]) + ", "
+            print(generated_outputs)
 
             create_midi(final_outputs, songNum)
 
