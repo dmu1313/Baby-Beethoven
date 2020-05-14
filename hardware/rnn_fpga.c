@@ -383,7 +383,7 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
 	
     for (int chunkNum = 0; i < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
 		
-		int remaining_cols = cols - ((chunkNum * CHUNK_SIZE) +  ;
+		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
         remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
 
 		//Load W
@@ -406,7 +406,11 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
 		
 		//start computation, wait for pl
 		mm_hw[0] = 1;
-			
+		
+		while ( (mm_hw[1] & 0x1) == 0) ;
+		
+        // Deassert start signal
+        mm_hw[0] = 0;
 	}
 }
 
