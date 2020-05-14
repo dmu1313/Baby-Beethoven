@@ -92,7 +92,7 @@
 #define GENERATED_SONG_LENGTH 80
 #define SEQUENCE_LENGTH 85
 
-#include "inputs.h"
+#include "input_notes.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -140,6 +140,13 @@ int main()
     
     // volatile unsigned int* hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
     volatile unsigned int* hadamard_hw = (unsigned int*)XPAR_BRAM_HADAMARD_0_S00_AXI_BASEADDR;
+
+    // Set up input one-hot vectors
+    float initial_inputs[SEQUENCE_LENGTH][INPUT_SIZE];
+    for (int i = 0; i < SEQUENCE_LENGTH; i++)
+        for (int j = 0; j < INPUT_SIZE; j++)
+            initial_inputs[i][j] = 0;
+    for (int i = 0; i < SEQUENCE_LENGTH; i++) initial_inputs[i][input_notes[i]] = 1;
 
     // Store generated notes
     int selected_notes[GENERATED_SONG_LENGTH];
@@ -254,6 +261,13 @@ int main()
         // log softmax and get most likely next note
         int selected_note = log_softmax(fc_results);
         selected_notes[noteNum] = selected_note;
+
+        // Append selected note to list of input notes when predicting the next note
+        for (int i = 1; i < SEQUENCE_LENGTH; i++)
+            for (int j = 0; j < INPUT_SIZE; j++)
+                initial_inputs[i-1][j] = initial_inputs[i][j];
+        for (int i = 0; i < INPUT_SIZE; i++) initial_inputs[SEQUENCE_LENGTH-1][i] = 0;
+        initial_inputs[SEQUENCE_LENGTH-1][selected_note] = 1;
     }
 
     for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
