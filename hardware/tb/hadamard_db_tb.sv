@@ -122,7 +122,6 @@ module hadamard_tb
         @(posedge clk);
         #1; reset = 0;
         @(posedge clk);
-        @(posedge clk);
 
         // fill bram a0
         for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES; i=i+1) begin
@@ -149,24 +148,21 @@ module hadamard_tb
         executing = 1;
 
         @(posedge clk);
-        @(posedge clk);
         ps_control[0] = 1;
+        @(posedge clk);
+        @(posedge clk);
+        ps_control[1] = 1;
         @(posedge clk);
         @(posedge clk);
 
         // wait enough cycles for computations to be done
-        while (pl_status[0] == 0) begin
+        while (pl_status[0] == 0 || pl_status[1] == 0) begin
             @(posedge clk);
         end
-
-        @(posedge clk);
-
-        ps_control[0] = 0;
         
         executing = 0;
         
-        @(posedge clk);
-        for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES/2; i=i+1) begin
+        for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES; i=i+1) begin
             ps_addr_product = i * 4;
             @(posedge clk);
 //            if (rddata_product != 6)
@@ -175,8 +171,16 @@ module hadamard_tb
         end
         
         
+        executing = 1;
         // Start 2nd test
-
+        ps_control[0] = 0;
+        @(posedge clk);
+        @(posedge clk);
+        ps_control[1] = 0;
+        @(posedge clk);
+        @(posedge clk);
+        executing = 0;
+        
         // fill bram a0
         for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES; i=i+1) begin
 //            ps_wrdata_a = 2; // integer test
@@ -205,14 +209,15 @@ module hadamard_tb
         ps_control[0] = 1;
         while (pl_status[0] == 0)
             @(posedge clk);
-        
-        ps_control[0] = 0;
+            
+        ps_control[1] = 1;
+        while (pl_status[1] == 0)
+            @(posedge clk);
+        @(posedge clk);
         
         executing = 0;
         
-        @(posedge clk);
-
-        for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES/2; i=i+1) begin
+        for (int i=0; i < (2**ADDR_WIDTH)/WORD_BYTES; i=i+1) begin
             ps_addr_product = i * 4;
             @(posedge clk);
 //            if (rddata_product != 6)

@@ -88,17 +88,17 @@
 #include "fc1_weight.h"
 #include "fc1_bias.h"
 
-#define NUM_LSTM_LAYERS 2
-#define GENERATED_SONG_LENGTH 80
+#define GENERATED_SONG_LENGTH 20
 #define SEQUENCE_LENGTH 85
+#define CHUNK_SIZE 256
 
 #include "input_notes.h"
 
 #include <stdio.h>
 #include <math.h>
 
-// #include "platform.h"
-// #include "xil_printf.h"
+#include "platform.h"
+#include "xil_printf.h"
 // #include "xtmrctr.h"  // timer
 
 // #define TIMER_BASE 0x42800000   // change to match base address of your AXI timer if necessary
@@ -133,10 +133,38 @@ void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float *
 void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, float * output, int length);
 void calc_hidden_state(float * o_t, float * c_t, float * output, int length);
 
+
+
+// Matrix Multiplication hardware (mm):
+// volatile float* mm_bram_w = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
+// volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
+// volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
+// volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
+
+// Hadamard Product hardware (hp):
+volatile float* hp_bram_a = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
+volatile float* hp_bram_b = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
+volatile float* hp_bram_product = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
+volatile unsigned int* hp_hw = (unsigned int*)XPAR_BRAM_HADAMARD_0_S00_AXI_BASEADDR;
+
 int main()
 {
-//    init_platform();
+    init_platform();
     printf("-------------- Starting Test ------------\n\r");
+
+	// Prepare timer stuff
+    // XTmrCtr TimerCounter;
+    // int Status = XTmrCtr_Initialize(&TimerCounter, TMRCTR_DEVICE_ID);
+    // if (Status != XST_SUCCESS) {
+    //     return XST_FAILURE;
+    // }
+
+    // XTmrCtr_SetOptions(&TimerCounter, 0, XTC_AUTO_RELOAD_OPTION);   // Setup timer
+    // XTmrCtr_Reset(&TimerCounter, 0);                                // reset timer
+    // int time0 = XTmrCtr_GetValue(&TimerCounter, 0);                 // read timer value
+    // XTmrCtr_Start(&TimerCounter, 0);                                // start timer
+
+
 
     // Set up input one-hot vectors
     float initial_inputs[SEQUENCE_LENGTH][INPUT_SIZE];
@@ -170,6 +198,57 @@ int main()
         for (int t = 0; t < SEQUENCE_LENGTH; t++) {
             // Calculate i_t
             for (int i = 0; i < HIDDEN_SIZE; i++) i_t[i] = 0;
+/*
+
+            // Load bias into BRAM
+            for (int i = 0; i < HIDDEN_SIZE; i++) bram_y[i] = b_ii_0[i];
+
+            // Load all weights and inputs into BRAM
+            for (int i = 0; i < INPUT_SIZE; i += CHUNK_SIZE) {
+                int remaining_cols = INPUT_SIZE - i;
+                remaining_cols  = (remaining_cols >= 256) ? 256 : remaining_cols;
+
+
+                // Load first half
+                for (int row = 0; row < HIDDEN_SIZE; row++) {
+                    for (int col = i; col < remaining_cols; col++) {
+                        bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
+                    }
+                }
+
+                // Start first half
+                hw[0] |= 0x01;
+
+                // Load second half
+                for (int row = 0; row < HIDDEN_SIZE; row++) {
+                    for (int col = i; col < remaining_cols; col++) {
+                        bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
+                    }
+                }
+
+                // Start second half
+                hw[0] |= 0x02;
+                
+                // Wait for FPGA to finish
+                while ( (hw[1] & 0x1) == 0) {
+                    ;
+                }
+
+                // Deassert start signal
+                hw[0] = 0;
+
+
+
+
+
+                for (int row = i; row < remaining_cols; row++) {
+                    bram_x[row] = initial_inputs[t][row];
+                }
+                for (int useless = remaining_cols; useless < CHUNK_SIZE; useless++) bram_x[useless] = 0;
+            }
+*/
+
+
             lstm_matrix_component_0(
                         W_ii_0, initial_inputs[t], b_ii_0,
                         W_hi_0, hidden_state, b_hi_0, 
@@ -286,10 +365,17 @@ int main()
 
     for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
         printf("%d, ", selected_notes[i]);
+        if (i % 10 == 0) {
+            printf("\r\n");
+        }
     }
 
+    // Read the timer value again
+    // int time1 = XTmrCtr_GetValue(&TimerCounter, 0);
+    // printf("Measured %d clock cycles == %f seconds\r\n", (time1-time0),((double)(time1-time0))/(TIMER_FREQ));
+
     printf("\n-------------- Done ------------\r\n\n\n\n");
-    // cleanup_platform();
+    cleanup_platform();
     return 0;
 }
 
@@ -330,8 +416,22 @@ int log_softmax(float fc_results[INPUT_SIZE]) {
 }
 
 void hadamard_product(float * a, float * b, float * output, int length) {
+    // Load data
     for (int i = 0; i < length; i++) {
-        output[i] = a[i] * b[i];
+        hp_bram_a[i] = a[i];
+        hp_bram_b[i] = b[i];
+    }
+    // Start
+    hp_hw[0] = 1;
+
+    // Wait for FPGA to finish
+    while ( (hp_hw[1] & 0x1) == 0) {}
+
+    // Deassert start signal
+    hp_hw[0] = 0;
+
+    for (int i = 0; i < length; i++) {
+        output[i] = hp_bram_product[i];
     }
 }
 
