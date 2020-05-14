@@ -110,12 +110,6 @@ void vector_sigmoid(float * vector, int length);
 void vector_tanh(float * input, float * output, int length);
 void hadamard_product(float * a, float * b, float * output, int length);
 void vector_add(float * a, float * b, float * output, int length);
-
-void setup_weight_arrays(float** W_ii[2], float** W_if[2], float** W_ig[2], float** W_io[2],
-                         float** W_hi[2], float** W_hf[2], float** W_hg[2], float** W_ho[2],
-                         float* b_ii[2], float* b_if[2], float* b_ig[2], float* b_io[2],
-                         float* b_hi[2], float* b_hf[2], float* b_hg[2], float* b_ho[2]
-                        );
 void fc_calc(float lstm_output[HIDDEN_SIZE], float fc_results[INPUT_SIZE]);
 int log_softmax(float fc_results[INPUT_SIZE]);
 
@@ -137,6 +131,13 @@ int main()
 {
 //    init_platform();
     printf("-------------- Starting Test ------------\n\r");
+
+   volatile unsigned int* mm_bram_W = (unsigned int*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
+   volatile unsigned int* mm_bram_x = (unsigned int*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
+   volatile unsigned int* mm_bram_y = (unsigned int*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
+   volatile unsigned int* mm_hw = (unsigned int*)XPAR_MATRIXVECPRODUCT_0_S00_AXI_BASEADDR;
+
+
 
     // Set up input one-hot vectors
     float initial_inputs[SEQUENCE_LENGTH][INPUT_SIZE];
@@ -170,11 +171,17 @@ int main()
         for (int t = 0; t < SEQUENCE_LENGTH; t++) {
             // Calculate i_t
             for (int i = 0; i < HIDDEN_SIZE; i++) i_t[i] = 0;
+			
+			
             lstm_matrix_component_0(
                         W_ii_0, initial_inputs[t], b_ii_0,
                         W_hi_0, hidden_state, b_hi_0, 
                         i_t, HIDDEN_SIZE, input_size
                     );
+					
+					
+					
+					
             vector_sigmoid(i_t, HIDDEN_SIZE);
 
             // Calculate f_t
@@ -367,12 +374,55 @@ void lstm_matrix_component_1(float (* weight_input)[HIDDEN_SIZE], float * input,
 // weights_rows == len(bias) == len(output)
 void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            output[i] += weights[i][j] * input[j];
+    // Load bias into BRAM
+    for (int i = 0; i < HIDDEN_SIZE; i++) mm_bram_y[i] = b_ii_0[i]; //b_ii_0 is *bias?
+
+    // Load all weights and inputs into BRAM W and x
+    for (int chunkNum = 0; i < INPUT_SIZE/CHUNK_SIZE; chunkNum++){	//iterate on every chunk (before remainding one)
+		
+		//Load W
+		for(int row = 0; row < HIDDEN_SIZE; row++){
+			for(int col = 0; col < CHUNK_SIZE; col++){
+				
+				mm_bram_W[(row * CHUNK_SIZE) + col] = W_ii_0[(row * INPUT_SIZE) + (chunkNum * CHUNK_SIZE) + col ]; //W_ii_0 is *weights?
+		
+			}
+		}
+		
+		//Load x
+		for (int row = 0; row < CHUNK_SIZE; row++){
+			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
+		}
+	}
+	//TODO: load remaining chunk with 0s
+	
+	
+	
+	
+ /*   for (int i = 0; i < INPUT_SIZE / CHUNK_SIZE; i++) {
+        int remaining_cols = INPUT_SIZE - i;
+        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+
+        for (int row = 0; row < HIDDEN_SIZE; row++) {
+            for (int col = i; col < remaining_cols; col++) {
+                bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
+            }
         }
-        output[i] += bias[i];
+        for (int row = i; row < remaining_cols; row++) {
+            bram_x[row] = input[row];
+        }
+        for (int useless = remaining_cols; useless < CHUNK_SIZE; useless++) bram_x[useless] = 0;
+        
+        mm_hw[0] = 1;
     }
+*/
+
+    // for (int i = 0; i < rows; i++) {
+    //     for (int j = 0; j < cols; j++) {
+    //         output[i] += weights[i][j] * input[j];
+    //     }
+    //     output[i] += bias[i];
+    // }
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
