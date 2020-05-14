@@ -136,10 +136,10 @@ void calc_hidden_state(float * o_t, float * c_t, float * output, int length);
 
 
 // Matrix Multiplication hardware (mm):
-// volatile float* mm_bram_w = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
-// volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
-// volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
-// volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
+volatile float* mm_bram_w = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
+volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
+volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
+volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
 
 // Hadamard Product hardware (hp):
 volatile float* hp_bram_a = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
@@ -198,57 +198,6 @@ int main()
         for (int t = 0; t < SEQUENCE_LENGTH; t++) {
             // Calculate i_t
             for (int i = 0; i < HIDDEN_SIZE; i++) i_t[i] = 0;
-/*
-
-            // Load bias into BRAM
-            for (int i = 0; i < HIDDEN_SIZE; i++) bram_y[i] = b_ii_0[i];
-
-            // Load all weights and inputs into BRAM
-            for (int i = 0; i < INPUT_SIZE; i += CHUNK_SIZE) {
-                int remaining_cols = INPUT_SIZE - i;
-                remaining_cols  = (remaining_cols >= 256) ? 256 : remaining_cols;
-
-
-                // Load first half
-                for (int row = 0; row < HIDDEN_SIZE; row++) {
-                    for (int col = i; col < remaining_cols; col++) {
-                        bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
-                    }
-                }
-
-                // Start first half
-                hw[0] |= 0x01;
-
-                // Load second half
-                for (int row = 0; row < HIDDEN_SIZE; row++) {
-                    for (int col = i; col < remaining_cols; col++) {
-                        bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
-                    }
-                }
-
-                // Start second half
-                hw[0] |= 0x02;
-                
-                // Wait for FPGA to finish
-                while ( (hw[1] & 0x1) == 0) {
-                    ;
-                }
-
-                // Deassert start signal
-                hw[0] = 0;
-
-
-
-
-
-                for (int row = i; row < remaining_cols; row++) {
-                    bram_x[row] = initial_inputs[t][row];
-                }
-                for (int useless = remaining_cols; useless < CHUNK_SIZE; useless++) bram_x[useless] = 0;
-            }
-*/
-
-
             lstm_matrix_component_0(
                         W_ii_0, initial_inputs[t], b_ii_0,
                         W_hi_0, hidden_state, b_hi_0, 
@@ -467,12 +416,33 @@ void lstm_matrix_component_1(float (* weight_input)[HIDDEN_SIZE], float * input,
 // weights_rows == len(bias) == len(output)
 void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            output[i] += weights[i][j] * input[j];
+    // Load bias into BRAM
+    for (int i = 0; i < HIDDEN_SIZE; i++) mm_bram_y[i] = b_ii_0[i];
+
+    // Load all weights and inputs into BRAM
+    for (int i = 0; i < INPUT_SIZE / CHUNK_SIZE; i++) {
+        int remaining_cols = INPUT_SIZE - i;
+        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+
+        for (int row = 0; row < HIDDEN_SIZE; row++) {
+            for (int col = i; col < remaining_cols; col++) {
+                bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
+            }
         }
-        output[i] += bias[i];
+        for (int row = i; row < remaining_cols; row++) {
+            bram_x[row] = input[row];
+        }
+        for (int useless = remaining_cols; useless < CHUNK_SIZE; useless++) bram_x[useless] = 0;
+        
+        hw[0] = 1;
     }
+
+    // for (int i = 0; i < rows; i++) {
+    //     for (int j = 0; j < cols; j++) {
+    //         output[i] += weights[i][j] * input[j];
+    //     }
+    //     output[i] += bias[i];
+    // }
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
