@@ -393,8 +393,11 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
 		for (int row = 0; row < CHUNK_SIZE; row++){
 			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
 		}
+		
+		//start computation, wait for pl
+		
 	}
-	//TODO: load remaining chunk with 0s
+	//TODO: load remaining W and x chunks 
 	
 	
 	
