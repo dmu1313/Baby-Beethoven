@@ -53,7 +53,7 @@ module matrixvect_mult
 	);
     
     //internal signals
-    wire clr_x, clr_y, inc_x, inc_y, done_x, done_y, onA;
+    wire clr_x, clr_y, inc_x, inc_y, done_x, done_y;
     
     datapath 
 		#(
@@ -80,8 +80,7 @@ module matrixvect_mult
 		 .clr_y(clr_y),
 		 .inc_y(inc_y),
 		 .done_y(done_y),
-		 .done_x(done_x),
-		 .onA(onA)
+		 .done_x(done_x)
 		);   		 
    
     controlpath 
@@ -98,8 +97,7 @@ module matrixvect_mult
 		 .done_y(done_y),
 		 .done_x(done_x),
 		 .ps_control(ps_control),
-		 .pl_status(pl_status),
-		 .onA(onA)
+		 .pl_status(pl_status)
     );
 
 endmodule
@@ -134,9 +132,8 @@ module datapath
     input   	 inc_x,
     input   	 clr_y,
     input   	 inc_y,
-    output reg 	 done_y,
-    output   	 done_x,
-    input  		 onA
+    output  	 done_y,
+    output   	 done_x
 	);
     
     wire fp_mult_valid;
@@ -168,11 +165,6 @@ module datapath
 	//Address signals
     always @* begin
     	bram_addr_W = ((bram_addr_y * length_N) + bram_addr_x) ; 
-		
-		if(onA==1) 
-			done_y = (bram_addr_y == ((length_M/2)-1)*4); 
-		else
-			done_y = (bram_addr_y == (length_M-1)*4); 
 			
 	end
     //Incrementer for x
@@ -185,17 +177,16 @@ module datapath
     //Incrementer for y
     always @(posedge clk) begin	
    	 if(clr_y)
-		if(onA == 1)	//if processing first half of buffer
-			bram_addr_y <= 0;
-		else
-			bram_addr_y <= length_M * 2; //(length_M * 4)/2
+
+		bram_addr_y <= 0;
+
    	 else if (inc_y)
    		 bram_addr_y <= bram_addr_y + 4;
     end
 
 	//Done signals    
     assign done_x = (bram_addr_x == (length_N-1)*4); 
-	
+	assign done_y = (bram_addr_y == (length_M-1)*4); 
 
 endmodule
 
@@ -217,25 +208,21 @@ module controlpath (
     input   	 done_x,
     //PS connections
     input  [31:0] ps_control, 	//bit 1 for 2nd half, bit 0 for 1st half
-    output reg [31:0] pl_status,
-	//Buffer Status
-	output onA
+    output [31:0] pl_status
+
 	);
 
-	reg onA;
-	
+
     //current state and next state regs
     reg [2:0]   	 p_state;
     reg [2:0]   	 next_state;
     
     //FSM: -----------------------------------------//
-    //state 0: Reset A   							//
+    //state 0: Reset   								//
     //state 1: write to y[]   						//
     //state 2: increment y index   				 	//
     //state 3: increment x index and clear y index  //
-    //state 4: Done A  								//
-	//state 5: Reset B   							//
-	//state 6: Done B   							//
+    //state 4: Done, wait for ACK					//
     //----------------------------------------------//
     
 //State transitions
@@ -249,8 +236,6 @@ module controlpath (
 //Next State Logic
     always @(*) begin
    	 if (p_state == 0) begin
-		 onA = 1;
-		 pl_status = 0;
    		 if (ps_control[0] == 1)
    			 next_state = 1;
    		 else    
@@ -270,32 +255,19 @@ module controlpath (
    	 end    
    	 
    	 else if (p_state == 3) begin
-   		 if (done_x) begin
-			if(onA == 1)
-				next_state = 4;
-			else 
-				next_state = 6;
-		 end
+   		 if (done_x) 
+			next_state = 4;
    		 else
    			 next_state = 1;
    	 end
    	 
    	 else if (p_state == 4) begin
-   		next_state = 5;
+   		if(ps_control[0] == 1)
+			next_state = 4;
+		else
+			next_state = 0;
    	 end
 	 
-	 else if (p_state == 5) begin
-		 onA = 0;
-		 pl_status = 0;
-		 if (ps_control[1] == 1)
-			next_state = 1;
-   		 else    
-   			 next_state = 5;
-	 end
-	 
-	 else if (p_state == 6) begin
-		next_state = 0;
-	 end
 	 
     end
     
@@ -303,19 +275,10 @@ module controlpath (
     assign bram_we_W = 0;   	 //always in read mode
     assign bram_we_x = 0;    
     assign bram_we_y = (p_state == 2 || p_state == 3) ? 4'hf : 4'h0;
-	
-	always @* begin
-	   if(p_state == 4)
-	       pl_status[0] = 1;
-	   else if (p_state == 6)
-	       pl_status[1] = 1;
-	end
-
-	
-    assign clr_x = (p_state == 0 || p_state == 4 || p_state == 5 || p_state == 6) ? 1 : 0; //take out 4/6?
-    assign clr_y = (p_state == 0 || p_state == 3|| p_state == 5) ? 1 : 0;
+	assign pl_status = (p_state == 4)? 1 : 0;
+    assign clr_x = (p_state == 0 || p_state == 4 )? 1 : 0; 
+    assign clr_y = (p_state == 0 || p_state == 3) ? 1 : 0;
     assign inc_x = (p_state == 3) ? 1 : 0;
     assign inc_y = (p_state == 2) ? 1 : 0;
 	
-
 endmodule
