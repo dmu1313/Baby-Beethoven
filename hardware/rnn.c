@@ -154,6 +154,7 @@ int main()
 
             // Calculate h_t
             calc_hidden_state(o_t, cell_state, hidden_state, HIDDEN_SIZE);
+            
             for (int i = 0; i < HIDDEN_SIZE; i++) { 
                 intermediate_inputs[t][i] = hidden_state[i];
             }
@@ -231,6 +232,9 @@ int main()
 
     for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
         printf("%d, ", selected_notes[i]);
+        if (i % 10 == 0) {
+            printf("\r\n");
+        }
     }
 
     printf("\n-------------- Done ------------\r\n\n\n\n");

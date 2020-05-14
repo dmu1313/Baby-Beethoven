@@ -375,57 +375,43 @@ void lstm_matrix_component_1(float (* weight_input)[HIDDEN_SIZE], float * input,
 void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
     // Load bias into BRAM
-    for (int i = 0; i < HIDDEN_SIZE; i++) mm_bram_y[i] = b_ii_0[i]; //b_ii_0 is *bias?
+    for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
 
     // Load all weights and inputs into BRAM W and x
-    for (int chunkNum = 0; i < INPUT_SIZE/CHUNK_SIZE; chunkNum++){	//iterate on every chunk (before remainding one)
+	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
+	
+    for (int chunkNum = 0; i < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
 		
+		int remaining_cols = cols - ((chunkNum * CHUNK_SIZE) +  ;
+        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+
 		//Load W
-		for(int row = 0; row < HIDDEN_SIZE; row++){
-			for(int col = 0; col < CHUNK_SIZE; col++){
+		for(int row = 0; row < rows; row++){
+			for(int col = 0; col < remaining_cols; col++){
 				
-				mm_bram_W[(row * CHUNK_SIZE) + col] = W_ii_0[(row * INPUT_SIZE) + (chunkNum * CHUNK_SIZE) + col ]; //W_ii_0 is *weights?
+				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[(row * cols)][ (chunkNum * CHUNK_SIZE) + col ]; 
 		
 			}
 		}
 		
 		//Load x
-		for (int row = 0; row < CHUNK_SIZE; row++){
+		for (int row = 0; row < remaining_cols; row++){
 			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
 		}
 		
+		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
+			mm_bram_x[j] = 0;
+		}
+		
 		//start computation, wait for pl
+		mm_hw[0] = 1;
+		
 		
 	}
-	//TODO: load remaining W and x chunks 
 	
-	
-	
-	
- /*   for (int i = 0; i < INPUT_SIZE / CHUNK_SIZE; i++) {
-        int remaining_cols = INPUT_SIZE - i;
-        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
 
-        for (int row = 0; row < HIDDEN_SIZE; row++) {
-            for (int col = i; col < remaining_cols; col++) {
-                bram_w[row * CHUNK_SIZE + col] = W_ii_0[row][col];
-            }
-        }
-        for (int row = i; row < remaining_cols; row++) {
-            bram_x[row] = input[row];
-        }
-        for (int useless = remaining_cols; useless < CHUNK_SIZE; useless++) bram_x[useless] = 0;
-        
-        mm_hw[0] = 1;
-    }
-*/
 
-    // for (int i = 0; i < rows; i++) {
-    //     for (int j = 0; j < cols; j++) {
-    //         output[i] += weights[i][j] * input[j];
-    //     }
-    //     output[i] += bias[i];
-    // }
+
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
