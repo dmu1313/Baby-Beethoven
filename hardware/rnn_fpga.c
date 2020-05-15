@@ -1,34 +1,3 @@
-/******************************************************************************
-*
-* Copyright (C) 2009 - 2014 Xilinx, Inc.  All rights reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a copy
-* of this software and associated documentation files (the "Software"), to deal
-* in the Software without restriction, including without limitation the rights
-* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-* copies of the Software, and to permit persons to whom the Software is
-* furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be included in
-* all copies or substantial portions of the Software.
-*
-* Use of the Software is limited solely to applications:
-* (a) running on a Xilinx device, or
-* (b) that interact with a Xilinx device through a bus or interconnect.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-* XILINX  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-* WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
-* OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-* SOFTWARE.
-*
-* Except as contained in this notice, the name of the Xilinx shall not be used
-* in advertising or otherwise to promote the sale, use or other dealings in
-* this Software without prior written authorization from Xilinx.
-*
-******************************************************************************/
 
 /*
  * helloworld.c: simple test application
@@ -88,17 +57,17 @@
 #include "fc1_weight.h"
 #include "fc1_bias.h"
 
-#define NUM_LSTM_LAYERS 2
-#define GENERATED_SONG_LENGTH 80
+#define GENERATED_SONG_LENGTH 5
 #define SEQUENCE_LENGTH 85
+#define CHUNK_SIZE 32
 
 #include "input_notes.h"
 
 #include <stdio.h>
 #include <math.h>
 
-// #include "platform.h"
-// #include "xil_printf.h"
+#include "platform.h"
+#include "xil_printf.h"
 // #include "xtmrctr.h"  // timer
 
 // #define TIMER_BASE 0x42800000   // change to match base address of your AXI timer if necessary
@@ -128,10 +97,10 @@ void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, fl
 void calc_hidden_state(float * o_t, float * c_t, float * output, int length);
 
 // Matrix Multiplication hardware (mm):
-volatile float* mm_bram_W = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
-volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
-volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
-volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MULT_ACC_0_S00_AXI_BASEADDR;
+volatile float* mm_bram_W = (float*)XPAR_AXI_BRAM_CTRL_3_S_AXI_BASEADDR;
+volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_4_S_AXI_BASEADDR;
+volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_5_S_AXI_BASEADDR;
+volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MATRIXVECT_MULT_0_S00_AXI_BASEADDR;
 
 // Hadamard Product hardware (hp):
 volatile float* hp_bram_a = (float*)XPAR_AXI_BRAM_CTRL_0_S_AXI_BASEADDR;
@@ -141,8 +110,23 @@ volatile unsigned int* hp_hw = (unsigned int*)XPAR_BRAM_HADAMARD_0_S00_AXI_BASEA
 
 int main()
 {
-//    init_platform();
+    init_platform();
     printf("-------------- Starting Test ------------\n\r");
+
+    printf("mm_hw[1] = %d\r\n", mm_hw[1]);
+    printf("mm_hw[2] = %d\r\n", mm_hw[2]);
+
+    // Prepare timer stuff
+    // XTmrCtr TimerCounter;
+    // int Status = XTmrCtr_Initialize(&TimerCounter, TMRCTR_DEVICE_ID);
+    // if (Status != XST_SUCCESS) {
+    //     return XST_FAILURE;
+    // }
+
+    // XTmrCtr_SetOptions(&TimerCounter, 0, XTC_AUTO_RELOAD_OPTION);   // Setup timer
+    // XTmrCtr_Reset(&TimerCounter, 0);                                // reset timer
+    // int time0 = XTmrCtr_GetValue(&TimerCounter, 0);                 // read timer value
+    // XTmrCtr_Start(&TimerCounter, 0);                                // start timer
 
 
     // Set up input one-hot vectors
@@ -291,12 +275,19 @@ int main()
         initial_inputs[SEQUENCE_LENGTH-1][selected_note] = 1;
     }
 
+    // Read the timer value again
+    // int time1 = XTmrCtr_GetValue(&TimerCounter, 0);
+    // printf("Measured %d clock cycles == %f seconds\r\n", (time1-time0),((double)(time1-time0))/(TIMER_FREQ));
+
     for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
         printf("%d, ", selected_notes[i]);
+        if (i % 10 == 0) {
+            printf("\r\n");
+        }
     }
 
     printf("\n-------------- Done ------------\r\n\n\n\n");
-    // cleanup_platform();
+    cleanup_platform();
     return 0;
 }
 
@@ -337,8 +328,22 @@ int log_softmax(float fc_results[INPUT_SIZE]) {
 }
 
 void hadamard_product(float * a, float * b, float * output, int length) {
+    // Load data
     for (int i = 0; i < length; i++) {
-        output[i] = a[i] * b[i];
+        hp_bram_a[i] = a[i];
+        hp_bram_b[i] = b[i];
+    }
+    // Start
+    hp_hw[0] = 1;
+
+    // Wait for FPGA to finish
+    while ( (hp_hw[1] & 0x1) == 0) {}
+
+    // Deassert start signal
+    hp_hw[0] = 0;
+
+    for (int i = 0; i < length; i++) {
+        output[i] = hp_bram_product[i];
     }
 }
 
@@ -375,53 +380,93 @@ void lstm_matrix_component_1(float (* weight_input)[HIDDEN_SIZE], float * input,
 void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
     // Load bias into BRAM
-
     for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
 
     // Load all weights and inputs into BRAM W and x
 	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
 	
-    for (int chunkNum = 0; i < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
-		
-		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
-        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
-
+    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
+		// printf("chunkNum: %d\r\n", chunkNum);
+        int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
+        remaining_cols = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+        
 		//Load W
 		for(int row = 0; row < rows; row++){
 			for(int col = 0; col < remaining_cols; col++){
-				
-				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[(row * cols)][ (chunkNum * CHUNK_SIZE) + col ]; 
-		
+				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ];
 			}
 		}
-		
+
 		//Load x
 		for (int row = 0; row < remaining_cols; row++){
 			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
 		}
+
+        // printf("loaded X\r\n");
 		
 		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
 			mm_bram_x[j] = 0;
 		}
+
+        // printf("zeros loaded\r\n");
 		
 		//start computation, wait for pl
 		mm_hw[0] = 1;
-		
-		while ( (mm_hw[1] & 0x1) == 0) ;
-		
+		while ( (mm_hw[1] & 0x1) == 0) {
+            // printf("Waiting for PL\r\n");
+            // printf("1. mm_hw[2] = %d\r\n", mm_hw[2]);
+        }
         // Deassert start signal
         mm_hw[0] = 0;
 	}
+    for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            output[i] += weights[i][j] * input[j];
+    // Load bias into BRAM
+    for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
+
+    // Load all weights and inputs into BRAM W and x
+	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
+	
+    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
+		// printf("chunkNum: %d\r\n", chunkNum);
+        int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
+        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+        
+		//Load W
+		for(int row = 0; row < rows; row++){
+			for(int col = 0; col < remaining_cols; col++){
+				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ]; 
+			}
+		}
+		
+        // printf("loaded W\r\n");
+
+		//Load x
+		for (int row = 0; row < remaining_cols; row++){
+			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
+		}
+
+        // printf("loaded X\r\n");
+		
+		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
+			mm_bram_x[j] = 0;
+		}
+
+        // printf("zeros loaded\r\n");
+		
+		//start computation, wait for pl
+		mm_hw[0] = 1;
+		while ( (mm_hw[1] & 0x1) == 0) {
+            // printf("Waiting for PL\r\n");
+            // printf("2. mm_hw[2] = %d\r\n", mm_hw[2]);
         }
-        output[i] += bias[i];
-    }
+        // Deassert start signal
+        mm_hw[0] = 0;
+	}
+    for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
 }
 
 void vector_add(float * a, float * b, float * output, int length) {
