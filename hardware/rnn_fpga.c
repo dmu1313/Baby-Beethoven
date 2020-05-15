@@ -386,8 +386,7 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
 	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
 	
     for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
-		// printf("chunkNum: %d\r\n", chunkNum);
-        int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
+		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
         remaining_cols = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
         
 		//Load W
@@ -400,16 +399,11 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
 		//Load x
 		for (int row = 0; row < remaining_cols; row++){
 			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
-		}
-
-        // printf("loaded X\r\n");
-		
+		}		
 		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
 			mm_bram_x[j] = 0;
 		}
 
-        // printf("zeros loaded\r\n");
-		
 		//start computation, wait for pl
 		mm_hw[0] = 1;
 		while ( (mm_hw[1] & 0x1) == 0) {
@@ -420,10 +414,35 @@ void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * 
         mm_hw[0] = 0;
 	}
     for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
+
+    for (int i = 0; i < HIDDEN_SIZE; i++) {
+        printf("%f, ", output[i]);
+        if (i % 15 == 0) {
+            printf("\r\n");
+        }
+    }
+
+    printf("\r\n");
+
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            output[i] += weights[i][j] * input[j];
+        }
+        output[i] += bias[i];
+    }
+
+    for (int i = 0; i < rows; i++) {
+        printf("%f, ", output[i]);
+        if (i % 15 == 0) {
+            printf("\r\n");
+        }
+    }
+
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
+printf("\r\n\n\nTest2!\n\n");
     // Load bias into BRAM
     for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
 
@@ -467,6 +486,34 @@ void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float *
         mm_hw[0] = 0;
 	}
     for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
+
+
+
+    for (int i = 0; i < HIDDEN_SIZE; i++) {
+        printf("%f, ", output[i]);
+        if (i % 15 == 0) {
+            printf("\r\n");
+        }
+    }
+
+    printf("\r\n");
+
+    for (int i = 0; i < rows; i++) {
+        for (int j = 0; j < cols; j++) {
+            output[i] += weights[i][j] * input[j];
+        }
+        output[i] += bias[i];
+    }
+
+    for (int i = 0; i < rows; i++) {
+        printf("%f, ", output[i]);
+        if (i % 15 == 0) {
+            printf("\r\n");
+        }
+    }
+
+    while (1) {}
+
 }
 
 void vector_add(float * a, float * b, float * output, int length) {
