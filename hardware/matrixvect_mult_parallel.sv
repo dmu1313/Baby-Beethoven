@@ -26,11 +26,11 @@ module matrixvect_mult
 	parameter LOG_P = 2,
     parameter P = 2,
 	
-	parameter addr_W_size = 16,
+	parameter addr_W_size = 15,
 	parameter addr_x_size = 12,
 	parameter addr_y_size = 12,
-	parameter length_M = 128,		//y is length M
-	parameter length_N = 128		//x is length N
+	parameter length_M = 512,		//y is length M
+	parameter length_N = 32		//x is length N
 	)(
     input   	 clk,
     input    	 reset,

@@ -218,5 +218,8 @@ module had_control
             else
                 next_state = WAIT_FOR_ACKNOW;
         end
+        else begin
+            next_state = WAIT_TO_START;
+        end
     end
 endmodule

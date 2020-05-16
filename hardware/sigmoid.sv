@@ -1,8 +1,9 @@
 
 module sigmoid
 #(
-    FLOAT_WIDTH = 31,
-    LOG_FLOAT_WIDTH = 5
+    FLOAT_WIDTH = 32,
+    LOG_FLOAT_WIDTH = 5,
+    NUM_WORDS = 512
 )
 (
     input clk,
@@ -21,68 +22,53 @@ module sigmoid
     output [BRAM_WIDTH-1:0] bram_wrdata_out,
     output [WORD_BYTES-1:0] bram_we_out
 );
-    logic doneA, doneB;
-    logic incA, incB;
-    logic clearA, clearB;
-    logic first_half;
-    
-    assign bram_we_a = 0;
-    assign bram_wrdata_a = 32'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx;
+    logic done;
+    logic inc;
+    logic clear;
 
-    had_datapath d(
+    assign bram_we_in = 0;
+    assign bram_wrdata_in = 32'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx;
+
+    sig_datapath #(.NUM_WORDS(NUM_WORDS)) d(
         .clk,
         .reset,
         
-        .bram_addr_a,
-        .bram_rddata_a,
+        .bram_addr_in,
+        .bram_rddata_in,
                 
-        .bram_addr_product,
-        .bram_wrdata_product,
+        .bram_addr_out,
+        .bram_wrdata_out,
         
-        .doneA,
-        .doneB,
-        .first_half,
-            
-        .incA,
-        .incB,
-        .clearA,
-        .clearB,
-        
-        .mult_out_valid
+        .done,
+        .inc,
+        .clear
     );
     
-    had_control c(
+    sig_control c(
         .clk,
         .reset,
         
         .ps_control,
         .pl_status,
         
-        .bram_we_product,
+        .bram_we_out,
         
-        .doneA,
-        .doneB,
-        .first_half,
-        
-        .incA,
-        .incB,
-        .clearA,
-        .clearB
+        .done,
+        .inc,
+        .clear
     );
 endmodule
 
-module sigmoid_params_rom
+module sigmoid_rom
 (
-    input clk,
-    input reset,
     input [1:0] index,
     output [31:0] slope,
     output [31:0] intercept
 );
-// y = 0.2117163174624291 * x + 0.5
-// y = 0.08999976708585981 * x + 0.6825748255648539
-// y = 0.02036651112664095 * x + 0.8914745934425106
-// y = 1
+    // y = 0.2117163174624291 * x + 0.5
+    // y = 0.08999976708585981 * x + 0.6825748255648539
+    // y = 0.02036651112664095 * x + 0.8914745934425106
+    // y = 1
     localparam logic [0:3][31:0] piecewise_slope =
     {
         32'h3e58cc2a,
@@ -98,10 +84,8 @@ module sigmoid_params_rom
         32'h3f6437ae,
         32'h3f800000
     };
-
     assign slope = piecewise_slope[index];
     assign intercept = piecewise_intercept[index];
-
 endmodule
 
 module sigmoid_datapath
@@ -109,7 +93,8 @@ module sigmoid_datapath
     FP_WIDTH = 32,
     BRAM_WIDTH = 32,
     WORD_BYTES = 4,
-    ADDR_WIDTH = 12
+    ADDR_WIDTH = 12,
+    NUM_WORDS = 512
 )
 (
     input clk,
@@ -121,43 +106,35 @@ module sigmoid_datapath
     output [ADDR_WIDTH-1:0] bram_addr_out,
     output [BRAM_WIDTH-1:0] bram_wrdata_out,
     
-    output doneA,
-    output doneB,
-    input first_half,
-    
-    input incA,
-    input incB,
-    input clearA,
-    input clearB,
-    
-    output mult_out_valid
+    output done,
+    input inc,
+    input clear
 );
+    // 0   <= y <= 1.5
+    // 1.5  < y <= 3
+    // 3    < y <= 5
+    // 5    < y
     localparam NUM_LINES = 4;
     localparam logic [0:3][31:0] piecewise_bounds =
-        { 32'h00000000,
-          32'h3fc00000,
-          32'h40400000,
-          32'h40a00000
+        { 32'h00000000,     // 0
+          32'h3fc00000,     // 1.5
+          32'h40400000,     // 3
+          32'h40a00000      // 5
         };
     logic [0:3] comparison_results;
     logic [1:0] sel_piecewise;
-    
-    logic [ADDR_WIDTH-1:0]  counterA;
-    logic [ADDR_WIDTH-1:0]  counterB;
-    logic [ADDR_WIDTH-1:0]  addr;
-    logic [FP_WIDTH-1:0]    mult_out;
-//    logic mult_out_valid;
+    logic [31:0] slope;
+    logic [31:0] intercept;
+    logic [31:0] mult_out;
+    logic [31:0] y_out;
+
+    logic [ADDR_WIDTH-1:0]  counter;
     logic [ADDR_WIDTH-1:0] wr_addr;
     
-    assign doneA = counterA == 2044;
-    assign doneB = counterB == 4092;
-    
-    assign addr = first_half ? counterA : counterB;
-    assign bram_addr_a = addr;
-    assign bram_addr_b = addr;
-
-    assign bram_addr_product = wr_addr;
-    assign bram_wrdata_product = mult_out;
+    assign done = counter == ((NUM_WORDS-1) * 4);
+    assign bram_addr_in = counter;
+    assign bram_addr_out = wr_addr;
+    assign bram_wrdata_out = y_out;
 
     generate
         genvar i;
@@ -167,7 +144,7 @@ module sigmoid_datapath
                 .s_axis_a_tdata(bram_rddata_in),              // input wire [31 : 0] s_axis_a_tdata
                 .s_axis_b_tvalid(1),            // input wire s_axis_b_tvalid
                 .s_axis_b_tdata(piecewise_bounds[i]),              // input wire [31 : 0] s_axis_b_tdata
-                .m_axis_result_tvalid(mult_out_valid),  // output wire m_axis_result_tvalid
+                .m_axis_result_tvalid(),  // output wire m_axis_result_tvalid
                 .m_axis_result_tdata(comparison_results[i])    // output wire [31 : 0] m_axis_result_tdata
             );
         end
@@ -188,34 +165,50 @@ module sigmoid_datapath
         end
     end
 
+    sigmoid_rom sig_rom (
+        .index(sel_piecewise),
+        .slope(slope),
+        .intercept(intercept)
+    );
+
+    sig_fp_mult fp_mult (
+      .s_axis_a_tvalid(1),            // input wire s_axis_a_tvalid
+      .s_axis_a_tdata(slope),              // input wire [31 : 0] s_axis_a_tdata
+      .s_axis_b_tvalid(1),            // input wire s_axis_b_tvalid
+      .s_axis_b_tdata(bram_rddata_in),              // input wire [31 : 0] s_axis_b_tdata
+      .m_axis_result_tvalid(),  // output wire m_axis_result_tvalid
+      .m_axis_result_tdata(mult_out)    // output wire [31 : 0] m_axis_result_tdata
+    );
+
+    sig_fp_add fp_add (
+      .s_axis_a_tvalid(1),            // input wire s_axis_a_tvalid
+      .s_axis_a_tdata(mult_out),              // input wire [31 : 0] s_axis_a_tdata
+      .s_axis_b_tvalid(1),            // input wire s_axis_b_tvalid
+      .s_axis_b_tdata(intercept),              // input wire [31 : 0] s_axis_b_tdata
+      .m_axis_result_tvalid(),  // output wire m_axis_result_tvalid
+      .m_axis_result_tdata(y_out)    // output wire [31 : 0] m_axis_result_tdata
+    );
+
     always_ff @(posedge clk) begin
         if (reset)
             wr_addr <= 0;
         else
-            wr_addr <= addr;
+            wr_addr <= counter;
     
-        if (clearA)
-            counterA <= 0;
-        else if (incA)
-            counterA <= counterA + 4;
-        
-        if (clearB)
-            counterB <= 2048;
-        else if (incB)
-            counterB <= counterB + 4;
+        if (clear)
+            counter <= 0;
+        else if (inc)
+            counter <= counter + 4;
     end
-
 endmodule
 
-typedef enum bit[3:0] {
+typedef enum bit[2:0] {
     WAIT_TO_START   = 0,
     START_A         = 1,
     LOOP_A          = 2,
     DONE_A          = 3,
-    START_B         = 4,
-    LOOP_B          = 5,
-    DONE_B          = 6
-} hadamard_states;
+    WAIT_FOR_ACK    = 4
+} sigmoid_states;
 
 module sigmoid_control
 #(
@@ -230,49 +223,20 @@ module sigmoid_control
     input  [31:0] ps_control,
     output [31:0] pl_status,
     
-    output [WORD_BYTES-1:0] bram_we_product,
+    output [WORD_BYTES-1:0] bram_we_out,
     
-    input  doneA,
-    input  doneB,
-    output first_half,
-    
-    output incA,
-    output incB,
-    output clearA,
-    output clearB
+    input  done,    
+    output inc,
+    output clear,
 );
-    logic [3:0] state;
-    logic [3:0] next_state;
-    logic completedA, completedB;
+    logic [2:0] state;
+    logic [2:0] next_state;
     
-    assign pl_status[0] = completedA;
-    assign pl_status[1] = completedB;
+    assign pl_status[0] = (state == WAIT_FOR_ACK);
+    assign inc = state == START_A || state == LOOP_A;
+    assign clear = state == WAIT_TO_START;
     
-    assign incA = state == START_A || state == LOOP_A;
-    assign incB = state == START_B || state == LOOP_B;
-    
-    assign clearA = state == WAIT_TO_START;
-    assign clearB = state == WAIT_TO_START;
-
-    assign first_half = (state == START_A || state == LOOP_A || state == DONE_A) ? 1 : 0;
-    
-    assign bram_we_product = (state == LOOP_A || state == DONE_A || state == LOOP_B || state == DONE_B) ? 4'b1111 : 4'b0000;
-
-    always_ff @(posedge clk) begin
-        if (reset)
-            completedA <= 0;
-        else if (state == DONE_A)
-            completedA <= 1;
-        else if (completedA == 1 && ps_control[0] == 0)
-            completedA <= 0;
-            
-        if (reset)
-            completedB <= 0;
-        else if (state == DONE_B)
-            completedB <= 1;
-        else if (completedB == 1 && ps_control[1] == 0)
-            completedB <= 0;
-    end
+    assign bram_we_out = (state == LOOP_A || state == DONE_A) ? 4'b1111 : 4'b0000;
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -285,12 +249,12 @@ module sigmoid_control
 
     always_comb begin
         if (state == WAIT_TO_START) begin
-            if (ps_control[0] && completedA == 0)
+            if (ps_control[0] == 1) begin
                 next_state = START_A;
-            else if (ps_control[1] && completedB == 0)
-                next_state = START_B;
-            else
+            end
+            else begin
                 next_state = WAIT_TO_START;
+            end
         end
         
         else if (state == START_A) begin
@@ -303,20 +267,16 @@ module sigmoid_control
                 next_state = LOOP_A;
         end
         else if (state == DONE_A) begin
-            next_state = WAIT_TO_START;
+            next_state = WAIT_FOR_ACK;
         end
-        
-        else if (state == START_B) begin
-            next_state = LOOP_B;
-        end
-        else if (state == LOOP_B) begin
-            if (doneB)
-                next_state = DONE_B;
+        else if (state == WAIT_FOR_ACK) begin
+            if (ps_control[0] == 0)
+                next_state = WAIT_TO_START;
             else
-                next_state = LOOP_B;
+                next_state = WAIT_FOR_ACK;
         end
-        else if (state == DONE_B) begin
+        else begin
             next_state = WAIT_TO_START;
-        end        
+        end
     end
 endmodule

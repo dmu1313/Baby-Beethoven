@@ -1,19 +1,4 @@
 
-/*
- * helloworld.c: simple test application
- *
- * This application configures UART 16550 to baud rate 9600.
- * PS7 UART (Zynq) is not initialized by this application, since
- * bootrom/bsp configures it to baud rate 115200
- *
- * ------------------------------------------------
- * | UART TYPE   BAUD RATE                        |
- * ------------------------------------------------
- *   uartns550   9600
- *   uartlite    Configurable only in HW design
- *   ps7_uart    115200 (configured by bootrom/bsp)
- */
-
 #define HIDDEN_SIZE     512
 #define INPUT_SIZE      1572
 
@@ -61,18 +46,28 @@
 #define SEQUENCE_LENGTH 85
 #define CHUNK_SIZE 32
 
+// #define USE_SOFTWARE_MATRIX
+// #define USE_SOFTWARE_HADAMARD
+#define USE_SOFTWARE_ACTIVATION
+
 #include "input_notes.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
 #include "platform.h"
 #include "xil_printf.h"
-// #include "xtmrctr.h"  // timer
+#include "xscugic.h" // interrupt handler
+#include "xdmaps.h"  // DMA driver
 
-// #define TIMER_BASE 0x42800000   // change to match base address of your AXI timer if necessary
-// #define TIMER_FREQ 				XPAR_TMRCTR_0_CLOCK_FREQ_HZ
-// #define TMRCTR_DEVICE_ID        XPAR_TMRCTR_0_DEVICE_ID
+#define TIMEOUT_LIMIT           0x2000000
+int SetupInterruptSystem(XScuGic *GicPtr, XDmaPs *DmaPtr);
+void DmaDoneHandler(unsigned int Channel, XDmaPs_Cmd *DmaCmd, void *CallbackRef);
+void transfer_array_to_bram(float * source, volatile float * dest, int length);
+void transfer_array_from_bram(volatile float* source, float * dest, int length);
+XDmaPs DmaInstance;
+XScuGic GicInstance;
 
 float sigmoid(float x);
 void vector_sigmoid(float * vector, int length);
@@ -97,9 +92,11 @@ void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, fl
 void calc_hidden_state(float * o_t, float * c_t, float * output, int length);
 
 // Matrix Multiplication hardware (mm):
-volatile float* mm_bram_W = (float*)XPAR_AXI_BRAM_CTRL_3_S_AXI_BASEADDR;
+volatile float* mm_bram_W1 = (float*)XPAR_AXI_BRAM_CTRL_3_S_AXI_BASEADDR;
 volatile float* mm_bram_x = (float*)XPAR_AXI_BRAM_CTRL_4_S_AXI_BASEADDR;
-volatile float* mm_bram_y = (float*)XPAR_AXI_BRAM_CTRL_5_S_AXI_BASEADDR;
+volatile float* mm_bram_y1 = (float*)XPAR_AXI_BRAM_CTRL_5_S_AXI_BASEADDR;
+volatile float* mm_bram_y2 = (float*)XPAR_AXI_BRAM_CTRL_6_S_AXI_BASEADDR;
+volatile float* mm_bram_W2 = (float*)XPAR_AXI_BRAM_CTRL_7_S_AXI_BASEADDR;
 volatile unsigned int* mm_hw = (unsigned int*)XPAR_BRAM_MATRIXVECT_MULT_0_S00_AXI_BASEADDR;
 
 // Hadamard Product hardware (hp):
@@ -108,26 +105,15 @@ volatile float* hp_bram_b = (float*)XPAR_AXI_BRAM_CTRL_1_S_AXI_BASEADDR;
 volatile float* hp_bram_product = (float*)XPAR_AXI_BRAM_CTRL_2_S_AXI_BASEADDR;
 volatile unsigned int* hp_hw = (unsigned int*)XPAR_BRAM_HADAMARD_0_S00_AXI_BASEADDR;
 
+// Activation hardware (hp):
+// volatile float* act_bram_in = (float*)XPAR_AXI_BRAM_CTRL_5_S_AXI_BASEADDR;
+// volatile float* act_bram_out = (float*)XPAR_AXI_BRAM_CTRL_6_S_AXI_BASEADDR;
+// volatile unsigned int* act_hw = (unsigned int*)XPAR_BRAM_ACTIVATION_0_S00_AXI_BASEADDR;
+
 int main()
 {
     init_platform();
     printf("-------------- Starting Test ------------\n\r");
-
-    printf("mm_hw[1] = %d\r\n", mm_hw[1]);
-    printf("mm_hw[2] = %d\r\n", mm_hw[2]);
-
-    // Prepare timer stuff
-    // XTmrCtr TimerCounter;
-    // int Status = XTmrCtr_Initialize(&TimerCounter, TMRCTR_DEVICE_ID);
-    // if (Status != XST_SUCCESS) {
-    //     return XST_FAILURE;
-    // }
-
-    // XTmrCtr_SetOptions(&TimerCounter, 0, XTC_AUTO_RELOAD_OPTION);   // Setup timer
-    // XTmrCtr_Reset(&TimerCounter, 0);                                // reset timer
-    // int time0 = XTmrCtr_GetValue(&TimerCounter, 0);                 // read timer value
-    // XTmrCtr_Start(&TimerCounter, 0);                                // start timer
-
 
     // Set up input one-hot vectors
     float initial_inputs[SEQUENCE_LENGTH][INPUT_SIZE];
@@ -266,6 +252,7 @@ int main()
         // log softmax and get most likely next note
         int selected_note = log_softmax(fc_results);
         selected_notes[noteNum] = selected_note;
+        printf("selected note: %d\r\n", selected_note);
 
         // Append selected note to list of input notes when predicting the next note
         for (int i = 1; i < SEQUENCE_LENGTH; i++)
@@ -274,10 +261,6 @@ int main()
         for (int i = 0; i < INPUT_SIZE; i++) initial_inputs[SEQUENCE_LENGTH-1][i] = 0;
         initial_inputs[SEQUENCE_LENGTH-1][selected_note] = 1;
     }
-
-    // Read the timer value again
-    // int time1 = XTmrCtr_GetValue(&TimerCounter, 0);
-    // printf("Measured %d clock cycles == %f seconds\r\n", (time1-time0),((double)(time1-time0))/(TIMER_FREQ));
 
     for (int i = 0; i < GENERATED_SONG_LENGTH; i++) {
         printf("%d, ", selected_notes[i]);
@@ -328,11 +311,19 @@ int log_softmax(float fc_results[INPUT_SIZE]) {
 }
 
 void hadamard_product(float * a, float * b, float * output, int length) {
-    // Load data
+#ifdef USE_SOFTWARE_HADAMARD
     for (int i = 0; i < length; i++) {
-        hp_bram_a[i] = a[i];
-        hp_bram_b[i] = b[i];
+        output[i] = a[i] * b[i];
     }
+#else
+    // Load data
+    transfer_array_to_bram(a, hp_bram_a, length);
+    transfer_array_to_bram(b, hp_bram_b, length);
+    // for (int i = 0; i < length; i++) {
+    //     hp_bram_a[i] = a[i];
+    //     hp_bram_b[i] = b[i];
+    // }
+
     // Start
     hp_hw[0] = 1;
 
@@ -342,9 +333,11 @@ void hadamard_product(float * a, float * b, float * output, int length) {
     // Deassert start signal
     hp_hw[0] = 0;
 
-    for (int i = 0; i < length; i++) {
-        output[i] = hp_bram_product[i];
-    }
+    transfer_array_from_bram(hp_bram_product, output, length);
+    // for (int i = 0; i < length; i++) {
+    //     output[i] = hp_bram_product[i];
+    // }
+#endif
 }
 
 void calc_cell_state(float * f_t, float * prev_c_t, float * i_t, float * g_t, float * output, int length) {
@@ -379,141 +372,134 @@ void lstm_matrix_component_1(float (* weight_input)[HIDDEN_SIZE], float * input,
 // weights_rows == len(bias) == len(output)
 void matrix_vector_mult_0(float (* weights)[INPUT_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
-    // Load bias into BRAM
-    for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
-
-    // Load all weights and inputs into BRAM W and x
-	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
-	
-    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
-		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
-        remaining_cols = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
-        
-		//Load W
-		for(int row = 0; row < rows; row++){
-			for(int col = 0; col < remaining_cols; col++){
-				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ];
-			}
-		}
-
-		//Load x
-		for (int row = 0; row < remaining_cols; row++){
-			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
-		}		
-		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
-			mm_bram_x[j] = 0;
-		}
-
-		//start computation, wait for pl
-		mm_hw[0] = 1;
-		while ( (mm_hw[1] & 0x1) == 0) {
-            // printf("Waiting for PL\r\n");
-            // printf("1. mm_hw[2] = %d\r\n", mm_hw[2]);
-        }
-        // Deassert start signal
-        mm_hw[0] = 0;
-	}
-    for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
-
-    for (int i = 0; i < HIDDEN_SIZE; i++) {
-        printf("%f, ", output[i]);
-        if (i % 15 == 0) {
-            printf("\r\n");
-        }
-    }
-
-    printf("\r\n");
-
+#ifdef USE_SOFTWARE_MATRIX
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
             output[i] += weights[i][j] * input[j];
         }
         output[i] += bias[i];
     }
+#else
+    // Load bias into BRAM
+    transfer_array_to_bram(bias, mm_bram_y1, rows / 2);
+    transfer_array_to_bram((bias+(rows/2)), mm_bram_y2, rows / 2);
+    // for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
 
-    for (int i = 0; i < rows; i++) {
-        printf("%f, ", output[i]);
-        if (i % 15 == 0) {
-            printf("\r\n");
-        }
+    // Load all weights and inputs into BRAM W and x
+	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
+
+    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
+		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
+        remaining_cols = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+
+		//Load W
+        float (* offset)[INPUT_SIZE] = weights + (rows / 2);
+		for(int row = 0; row < rows / 2; row++){
+            int row_offset = row * CHUNK_SIZE;
+            transfer_array_to_bram(weights[row] + chunkNum*CHUNK_SIZE, (mm_bram_W1 + row_offset), remaining_cols);
+            transfer_array_to_bram(offset[row] + chunkNum*CHUNK_SIZE, (mm_bram_W2 + row_offset), remaining_cols);
+            // for(int col = 0; col < remaining_cols; col++){
+			// 	mm_bram_W1[(row_offset) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ];
+            //     mm_bram_W2[(row_offset) + col] = offset[row][ (chunkNum * CHUNK_SIZE) + col ];
+			// }
+		}
+
+		//Load x
+        transfer_array_to_bram((input + (chunkNum * CHUNK_SIZE)), mm_bram_x, remaining_cols);
+		// for (int row = 0; row < remaining_cols; row++){
+		// 	mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
+		// }		
+		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
+			mm_bram_x[j] = 0;
+		}
+
+		//start computation, wait for pl
+		mm_hw[0] = 1;
+		while ( (mm_hw[1] & 0x1) == 0) {}
+        // Deassert start signal
+        mm_hw[0] = 0;
+	}
+
+    float y1_output[HIDDEN_SIZE/2];
+    float y2_output[HIDDEN_SIZE/2];
+    transfer_array_from_bram(mm_bram_y1, y1_output, rows / 2);
+    transfer_array_from_bram(mm_bram_y2, y2_output, rows / 2);
+    volatile float * offset = output + (rows / 2);
+    for (int i = 0; i < rows/2; i++) {
+        output[i] += y1_output[i];
+        offset[i] += y2_output[i];
     }
-
+    // for (int i = 0; i < rows/2; i++) {
+    //     output[i] += mm_bram_y1[i];
+    //     offset[i] += mm_bram_y2[i];
+    // }
+#endif
 }
 
 void matrix_vector_mult_1(float (* weights)[HIDDEN_SIZE], float * input, float * bias, float * output,
                         int rows, int cols) {
-printf("\r\n\n\nTest2!\n\n");
-    // Load bias into BRAM
-    for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
-
-    // Load all weights and inputs into BRAM W and x
-	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
-	
-    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
-		// printf("chunkNum: %d\r\n", chunkNum);
-        int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
-        remaining_cols  = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
-        
-		//Load W
-		for(int row = 0; row < rows; row++){
-			for(int col = 0; col < remaining_cols; col++){
-				mm_bram_W[(row * CHUNK_SIZE) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ]; 
-			}
-		}
-		
-        // printf("loaded W\r\n");
-
-		//Load x
-		for (int row = 0; row < remaining_cols; row++){
-			mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
-		}
-
-        // printf("loaded X\r\n");
-		
-		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
-			mm_bram_x[j] = 0;
-		}
-
-        // printf("zeros loaded\r\n");
-		
-		//start computation, wait for pl
-		mm_hw[0] = 1;
-		while ( (mm_hw[1] & 0x1) == 0) {
-            // printf("Waiting for PL\r\n");
-            // printf("2. mm_hw[2] = %d\r\n", mm_hw[2]);
-        }
-        // Deassert start signal
-        mm_hw[0] = 0;
-	}
-    for (int i = 0; i < rows; i++) output[i] = mm_bram_y[i];
-
-
-
-    for (int i = 0; i < HIDDEN_SIZE; i++) {
-        printf("%f, ", output[i]);
-        if (i % 15 == 0) {
-            printf("\r\n");
-        }
-    }
-
-    printf("\r\n");
-
+#ifdef USE_SOFTWARE_MATRIX
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
             output[i] += weights[i][j] * input[j];
         }
         output[i] += bias[i];
     }
+#else
+    // Load bias into BRAM
+    transfer_array_to_bram(bias, mm_bram_y1, rows / 2);
+    transfer_array_to_bram((bias+(rows/2)), mm_bram_y2, rows / 2);
+    // for (int i = 0; i < rows; i++) mm_bram_y[i] = bias[i];
 
-    for (int i = 0; i < rows; i++) {
-        printf("%f, ", output[i]);
-        if (i % 15 == 0) {
-            printf("\r\n");
-        }
+    // Load all weights and inputs into BRAM W and x
+	int num_iter = (cols % CHUNK_SIZE == 0)? cols/CHUNK_SIZE : cols/CHUNK_SIZE +1;
+
+    for (int chunkNum = 0; chunkNum < num_iter; chunkNum++){	//iterate on every chunk (before remainding one)
+		int remaining_cols = cols - (chunkNum * CHUNK_SIZE) ;
+        remaining_cols = (remaining_cols >= CHUNK_SIZE) ? CHUNK_SIZE : remaining_cols;
+
+		//Load W
+        float (* offset)[HIDDEN_SIZE] = weights + (rows / 2);
+		for(int row = 0; row < rows / 2; row++){
+            int row_offset = row * CHUNK_SIZE;
+            transfer_array_to_bram(weights[row] + chunkNum*CHUNK_SIZE, (mm_bram_W1 + row_offset), remaining_cols);
+            transfer_array_to_bram(offset[row] + chunkNum*CHUNK_SIZE, (mm_bram_W2 + row_offset), remaining_cols);
+            // for(int col = 0; col < remaining_cols; col++){
+			// 	mm_bram_W1[(row_offset) + col] = weights[row][ (chunkNum * CHUNK_SIZE) + col ];
+            //     mm_bram_W2[(row_offset) + col] = offset[row][ (chunkNum * CHUNK_SIZE) + col ];
+			// }
+		}
+
+		//Load x
+        transfer_array_to_bram((input + (chunkNum * CHUNK_SIZE)), mm_bram_x, remaining_cols);
+		// for (int row = 0; row < remaining_cols; row++){
+		// 	mm_bram_x[row] = input[(chunkNum * CHUNK_SIZE) + row ];
+		// }		
+		for (int j = remaining_cols; j < CHUNK_SIZE; j++){
+			mm_bram_x[j] = 0;
+		}
+
+		//start computation, wait for pl
+		mm_hw[0] = 1;
+		while ( (mm_hw[1] & 0x1) == 0) {}
+        // Deassert start signal
+        mm_hw[0] = 0;
+	}
+
+    float y1_output[HIDDEN_SIZE/2];
+    float y2_output[HIDDEN_SIZE/2];
+    transfer_array_from_bram(mm_bram_y1, y1_output, rows / 2);
+    transfer_array_from_bram(mm_bram_y2, y2_output, rows / 2);
+    volatile float * offset = output + (rows / 2);
+    for (int i = 0; i < rows/2; i++) {
+        output[i] += y1_output[i];
+        offset[i] += y2_output[i];
     }
-
-    while (1) {}
-
+    // for (int i = 0; i < rows/2; i++) {
+    //     output[i] += mm_bram_y1[i];
+    //     offset[i] += mm_bram_y2[i];
+    // }
+#endif
 }
 
 void vector_add(float * a, float * b, float * output, int length) {
@@ -526,14 +512,256 @@ float sigmoid(float x) {
     return 1.0 / (1.0 + exp(-x));
 }
 
+// ps_control[0] = 1, means sigmoid
+// ps_control[1] = 1, means tanh
 void vector_sigmoid(float * vector, int length) {
+#ifdef USE_SOFTWARE_ACTIVATION
     for (int i = 0; i < length; i++) {
         vector[i] = sigmoid(vector[i]);
     }
+#else
+    // Load data
+    transfer_array_to_bram(vector, act_bram_in, length);
+    // for (int i = 0; i < length; i++) {
+    //     act_bram_in[i] = vector[i];
+    // }
+
+    // Start
+    act_hw[0] = 1;
+    // Wait for FPGA to finish
+    while ( (act_hw[1] & 0x1) == 0) {}
+    // Deassert start signal
+    act_hw[0] = 0;
+
+    transfer_array_from_bram(act_bram_out, vector, length);
+    // for (int i = 0; i < length; i++) {
+    //     vector[i] = act_bram_out[i];
+    // }
+#endif
 }
 
+// ps_control[0] = 1, means sigmoid
+// ps_control[1] = 1, means tanh
 void vector_tanh(float * input, float * output, int length) {
+#ifdef USE_SOFTWARE_ACTIVATION
     for (int i = 0; i < length; i++) {
         output[i] = tanhf(input[i]);
     }
+#else
+    // Load data
+    transfer_array_to_bram(input, act_bram_in, length);
+    // for (int i = 0; i < length; i++) {
+    //     act_bram_in[i] = input[i];
+    // }
+
+    // Start
+    act_hw[0] = 2;
+    // Wait for FPGA to finish
+    while ( (act_hw[1] & 0x1) == 0) {}
+    // Deassert start signal
+    act_hw[0] = 0;
+
+    transfer_array_from_bram(act_bram_out, output, length);
+    // for (int i = 0; i < length; i++) {
+    //     output[i] = act_bram_out[i];
+    // }
+#endif
+}
+
+
+
+void transfer_array_from_bram(volatile float* source, float * dest, int length) {
+    volatile int* txDone = malloc(sizeof(int));
+    *txDone = 0;
+
+    u16 DeviceId = XPAR_XDMAPS_1_DEVICE_ID;
+    XDmaPs_Config *DmaCfg;
+    XDmaPs *DmaInst = &DmaInstance;
+    XDmaPs_Cmd DmaCmd;
+    memset(&DmaCmd, 0, sizeof(XDmaPs_Cmd));
+    DmaCmd.ChanCtrl.SrcBurstSize = 4;
+    DmaCmd.ChanCtrl.SrcBurstLen = 4;
+    DmaCmd.ChanCtrl.SrcInc = 1;
+    DmaCmd.ChanCtrl.DstBurstSize = 4;
+    DmaCmd.ChanCtrl.DstBurstLen = 4;
+    DmaCmd.ChanCtrl.DstInc = 1;
+    DmaCmd.BD.SrcAddr = (u32) source;  // source = txBuff
+    DmaCmd.BD.DstAddr = (u32) dest;    // destination = bram
+    DmaCmd.BD.Length = length * sizeof(float);   // length of data to transfer
+
+    // Initialize DMA driver
+    DmaCfg = XDmaPs_LookupConfig(DeviceId);
+    if (DmaCfg == NULL) {
+    	printf("DmaCfg error!\r\n");
+    	return;
+    }
+    int Status = XDmaPs_CfgInitialize(DmaInst, DmaCfg, DmaCfg->BaseAddress);
+    if (Status != XST_SUCCESS) {
+    	printf("CfgInitialize error!\r\n");
+        return;
+    }
+    // Setup interrupts
+    Status = SetupInterruptSystem(&GicInstance, DmaInst);
+    if (Status != XST_SUCCESS) {
+    	printf("SetupInterrupt error!\r\n");
+        return;
+    }
+    // Enable the interrupt handler
+    XDmaPs_SetDoneHandler(DmaInst, 0, DmaDoneHandler, (void *)txDone);
+    // Start the DMA
+    Status = XDmaPs_Start(DmaInst, 0, &DmaCmd, 0);
+    if (Status != XST_SUCCESS) {
+    	printf("Start error!\r\n");
+        return;
+    }
+    // Loop until the DMA is done --  txDone will be set in interrupt handler
+    int TimeOutCnt=0;
+    while (!(*txDone) && TimeOutCnt < TIMEOUT_LIMIT) {
+        TimeOutCnt++;
+    }
+    if (TimeOutCnt >= TIMEOUT_LIMIT) {
+        printf("timeout\r\n");
+        return;
+    }
+}
+
+void transfer_array_to_bram(float * source, volatile float * dest, int length) {
+    volatile int* txDone = malloc(sizeof(int));
+    *txDone = 0;
+
+    u16 DeviceId = XPAR_XDMAPS_1_DEVICE_ID;
+    XDmaPs_Config *DmaCfg;
+    XDmaPs *DmaInst = &DmaInstance;
+    XDmaPs_Cmd DmaCmd;
+    memset(&DmaCmd, 0, sizeof(XDmaPs_Cmd));
+    DmaCmd.ChanCtrl.SrcBurstSize = 4;
+    DmaCmd.ChanCtrl.SrcBurstLen = 4;
+    DmaCmd.ChanCtrl.SrcInc = 1;
+    DmaCmd.ChanCtrl.DstBurstSize = 4;
+    DmaCmd.ChanCtrl.DstBurstLen = 4;
+    DmaCmd.ChanCtrl.DstInc = 1;
+    DmaCmd.BD.SrcAddr = (u32) source;  // source = txBuff
+    DmaCmd.BD.DstAddr = (u32) dest;    // destination = bram
+    DmaCmd.BD.Length = length * sizeof(float);   // length of data to transfer
+
+    // Initialize DMA driver
+    DmaCfg = XDmaPs_LookupConfig(DeviceId);
+    if (DmaCfg == NULL) {
+    	printf("DmaCfg error!\r\n");
+    	return;
+    }
+    int Status = XDmaPs_CfgInitialize(DmaInst, DmaCfg, DmaCfg->BaseAddress);
+    if (Status != XST_SUCCESS) {
+    	printf("CfgInitialize error!\r\n");
+        return;
+    }
+    // Setup interrupts
+    Status = SetupInterruptSystem(&GicInstance, DmaInst);
+    if (Status != XST_SUCCESS) {
+    	printf("SetupInterrupt error!\r\n");
+        return;
+    }
+    // Enable the interrupt handler
+    XDmaPs_SetDoneHandler(DmaInst, 0, DmaDoneHandler, (void *)txDone);
+    // Start the DMA
+    Status = XDmaPs_Start(DmaInst, 0, &DmaCmd, 0);
+    if (Status != XST_SUCCESS) {
+    	printf("Start error!\r\n");
+        return;
+    }
+    // Loop until the DMA is done --  txDone will be set in interrupt handler
+    int TimeOutCnt=0;
+    while (!(*txDone) && TimeOutCnt < TIMEOUT_LIMIT) {
+        TimeOutCnt++;
+    }
+    if (TimeOutCnt >= TIMEOUT_LIMIT) {
+        printf("timeout\r\n");
+        return;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+int SetupInterruptSystem(XScuGic *GicPtr, XDmaPs *DmaPtr)
+{
+    int Status;
+    XScuGic_Config *GicConfig;
+
+    Xil_ExceptionInit();
+
+    /*
+     * Initialize the interrupt controller driver so that it is ready to
+     * use.
+     */
+    GicConfig = XScuGic_LookupConfig(XPAR_SCUGIC_SINGLE_DEVICE_ID);
+    if (NULL == GicConfig) {
+        return XST_FAILURE;
+    }
+
+    Status = XScuGic_CfgInitialize(GicPtr, GicConfig,
+                       GicConfig->CpuBaseAddress);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    /*
+     * Connect the interrupt controller interrupt handler to the hardware
+     * interrupt handling logic in the processor.
+     */
+    Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_IRQ_INT,
+                 (Xil_ExceptionHandler)XScuGic_InterruptHandler,
+                 GicPtr);
+
+    /*
+     * Connect the device driver handlers that will be called when an interrupt
+     * for the device occurs, the device driver handler performs the specific
+     * interrupt processing for the device
+     */
+
+    /*
+     * Connect the Fault ISR
+     */
+    Status = XScuGic_Connect(GicPtr,
+                 XPAR_XDMAPS_0_FAULT_INTR,
+                 (Xil_InterruptHandler)XDmaPs_FaultISR,
+                 (void *)DmaPtr);
+    if (Status != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    /*
+     * Connect the Done ISR for all 8 channels of DMA 0
+     */
+    Status = XScuGic_Connect(GicPtr,
+                 XPAR_XDMAPS_0_DONE_INTR_0,
+                 (Xil_InterruptHandler)XDmaPs_DoneISR_0,
+                 (void *)DmaPtr);
+
+    if (Status != XST_SUCCESS)
+        return XST_FAILURE;
+
+    /*
+     * Enable the interrupts for the device
+     */
+    XScuGic_Enable(GicPtr, XPAR_XDMAPS_0_DONE_INTR_0);
+    XScuGic_Enable(GicPtr, XPAR_XDMAPS_0_FAULT_INTR);
+
+    Xil_ExceptionEnable();
+
+    return XST_SUCCESS;
+
+}
+void DmaDoneHandler(unsigned int Channel, XDmaPs_Cmd *DmaCmd, void *CallbackRef)
+{
+    volatile int *done = (volatile int *)CallbackRef;
+    *done = 1;
+    return;
 }
